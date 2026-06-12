@@ -1,5 +1,6 @@
 import deepxde as dde
 import numpy as np
+import torch
 
 def get_ns_equation_data(scale_factor="small"):
     nu = 0.05
@@ -8,17 +9,75 @@ def get_ns_equation_data(scale_factor="small"):
     def pde(x, y):
         u, v, p = y[:, 0:1], y[:, 1:2], y[:, 2:3]
         
-        du_x = dde.grad.jacobian(y, x, i=0, j=0)
-        du_y = dde.grad.jacobian(y, x, i=0, j=1)
-        dv_x = dde.grad.jacobian(y, x, i=1, j=0)
-        dv_y = dde.grad.jacobian(y, x, i=1, j=1)
-        dp_x = dde.grad.jacobian(y, x, i=2, j=0)
-        dp_y = dde.grad.jacobian(y, x, i=2, j=1)
+        # 使用原生 PyTorch 一次性求出 u 对 x, y 的偏导数
+        grad_u = torch.autograd.grad(
+            u, x, 
+            grad_outputs=torch.ones_like(u),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        du_x = grad_u[:, 0:1]
+        du_y = grad_u[:, 1:2]
         
-        du_xx = dde.grad.hessian(y, x, component=0, i=0, j=0)
-        du_yy = dde.grad.hessian(y, x, component=0, i=1, j=1)
-        dv_xx = dde.grad.hessian(y, x, component=1, i=0, j=0)
-        dv_yy = dde.grad.hessian(y, x, component=1, i=1, j=1)
+        # 使用原生 PyTorch 一次性求出 v 对 x, y 的偏导数
+        grad_v = torch.autograd.grad(
+            v, x, 
+            grad_outputs=torch.ones_like(v),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        dv_x = grad_v[:, 0:1]
+        dv_y = grad_v[:, 1:2]
+        
+        # 使用原生 PyTorch 一次性求出 p 对 x, y 的偏导数
+        grad_p = torch.autograd.grad(
+            p, x, 
+            grad_outputs=torch.ones_like(p),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        dp_x = grad_p[:, 0:1]
+        dp_y = grad_p[:, 1:2]
+        
+        # 二阶导数计算
+        grad_ux = torch.autograd.grad(
+            du_x, x, 
+            grad_outputs=torch.ones_like(du_x),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        du_xx = grad_ux[:, 0:1]
+        
+        grad_uy = torch.autograd.grad(
+            du_y, x, 
+            grad_outputs=torch.ones_like(du_y),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        du_yy = grad_uy[:, 1:2]
+        
+        grad_vx = torch.autograd.grad(
+            dv_x, x, 
+            grad_outputs=torch.ones_like(dv_x),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        dv_xx = grad_vx[:, 0:1]
+        
+        grad_vy = torch.autograd.grad(
+            dv_y, x, 
+            grad_outputs=torch.ones_like(dv_y),
+            create_graph=True, 
+            retain_graph=True, 
+            only_inputs=True
+        )[0]
+        dv_yy = grad_vy[:, 1:2]
         
         eq_u = u * du_x + v * du_y + dp_x - nu * (du_xx + du_yy)
         eq_v = u * dv_x + v * dv_y + dp_y - nu * (dv_xx + dv_yy)

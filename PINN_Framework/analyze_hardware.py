@@ -26,49 +26,140 @@ def analyze_and_plot():
         print("No valid distributed hardware data found.")
         return
         
-    # 时间归一化
+    # 1. 相对时间轴（Relative Time）取代绝对时间戳
     t0 = df['Time'].min()
-    df['Time_Min'] = (df['Time'] - t0) / 60.0
+    df['Time_Min'] = (df['Time'] - t0) / 60.0 # 转换为经过的分钟数
     
     os.makedirs("outputs/figures", exist_ok=True)
     
-    # 颜色循环以支持多达 8 卡
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+    # 学术配色
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
     
-    # === 图1：多卡 VRAM 占用折线图 ===
-    plt.figure(figsize=(12, 6))
+    # 4. 识别阶段性分界点（利用率首次突破 20% 视为进入正式计算阶段）
+    active_runs = df[df['GPU_Util'] > 20]
+    if not active_runs.empty:
+        warmup_end_time = active_runs['Time_Min'].min()
+    else:
+        warmup_end_time = 0.05  # 默认 3 秒左右
+        
+    # ======================================================
+    # 核心重构：共享 X 轴的紧凑子图（3x1 Shared X-Axis Grid）
+    # ======================================================
+    fig, axs = plt.subplots(3, 1, sharex=True, figsize=(10, 11), dpi=300)
+    
+    # --- (a) VRAM 子图 ---
+    for i, (gpu_id, group) in enumerate(df.groupby('GPU_ID')):
+        vram_gb = group['VRAM_MB'] / 1024.0
+        c = colors[i % len(colors)]
+        axs[0].plot(group['Time_Min'], vram_gb, label=f"GPU {gpu_id.split('_')[-1]}", color=c, linewidth=1.5, alpha=0.85)
+        
+    # 3. 绘制 OOM 关键物理边界红虚线
+    axs[0].axhline(y=24.0, color='r', linestyle='--', linewidth=1.2, alpha=0.85)
+    axs[0].text(df['Time_Min'].max() * 0.98, 24.3, "NVIDIA RTX 4090 VRAM Limit (24GB)", color='r', fontsize=8, ha='right', va='bottom', fontweight='semibold')
+    
+    # 如果数据突破了 24GB，则自动画出 AMD W7900 (48GB) 的限制线，形成强烈的“破线”对比感
+    max_vram_gb = df['VRAM_MB'].max() / 1024.0
+    if max_vram_gb > 24.0:
+        axs[0].axhline(y=48.0, color='darkblue', linestyle='--', linewidth=1.2, alpha=0.85)
+        axs[0].text(df['Time_Min'].max() * 0.98, 48.3, "AMD W7900 VRAM Limit (48GB)", color='darkblue', fontsize=8, ha='right', va='bottom', fontweight='semibold')
+        axs[0].set_ylim(0, max(52.0, max_vram_gb * 1.15))
+    else:
+        axs[0].set_ylim(0, 28.0) # 留出 24GB 线之上的余量空间
+        
+    axs[0].set_ylabel("VRAM Usage [GB]", fontsize=11, fontweight='semibold')
+    axs[0].set_title("(a) Memory Footprint & Physical Boundaries", fontsize=12, fontweight='bold', pad=8)
+    axs[0].grid(True, linestyle=':', linewidth=0.5, alpha=0.6)
+    
+    # --- (b) GPU 核心利用率子图 ---
+    for i, (gpu_id, group) in enumerate(df.groupby('GPU_ID')):
+        c = colors[i % len(colors)]
+        axs[1].plot(group['Time_Min'], group['GPU_Util'], color=c, linewidth=1.5, alpha=0.85)
+    axs[1].set_ylabel("Core Utilization [%]", fontsize=11, fontweight='semibold')
+    axs[1].set_title("(b) Computational Load (SM Utilization)", fontsize=12, fontweight='bold', pad=8)
+    axs[1].set_ylim(-5, 105)
+    axs[1].grid(True, linestyle=':', linewidth=0.5, alpha=0.6)
+    
+    # --- (c) 功耗子图 ---
+    for i, (gpu_id, group) in enumerate(df.groupby('GPU_ID')):
+        c = colors[i % len(colors)]
+        axs[2].plot(group['Time_Min'], group['Power_W'], color=c, linewidth=1.5, alpha=0.85)
+    axs[2].set_xlabel("Elapsed Time [min]", fontsize=11, fontweight='semibold')
+    axs[2].set_ylabel("Power Draw [W]", fontsize=11, fontweight='semibold')
+    axs[2].set_title("(c) Power Consumption", fontsize=12, fontweight='bold', pad=8)
+    axs[2].grid(True, linestyle=':', linewidth=0.5, alpha=0.6)
+    
+    # --- 4. 阶段性阴影高亮（Shaded Regions / axvspan） ---
+    for ax in axs:
+        # 阶段 A：数据加载与静态图预热 (Warmup & Capture)
+        ax.axvspan(0, warmup_end_time, color='grey', alpha=0.12)
+        # 阶段 B：PINN 2D N-S Hessian 计算阶段
+        ax.axvspan(warmup_end_time, df['Time_Min'].max(), color='green', alpha=0.05)
+        
+    # 添加阶段性文字标注（标在利用率子图中央，保持排版精美）
+    axs[1].text(warmup_end_time / 2.0, 50, "Warmup &\nCapture", color='#555555', fontsize=8, ha='center', va='center', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3'))
+    axs[1].text((warmup_end_time + df['Time_Min'].max()) / 2.0, 50, "PINN 2D N-S Hessian Computation (CUDA Graph Replay)", color='darkgreen', fontsize=9, ha='center', va='center', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3'))
+    
+    # 统一合并 Legend 到整张图表的最下方
+    handles, labels = axs[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncol=min(8, len(labels)), bbox_to_anchor=(0.5, 0.01), fontsize=10)
+    
+    # 2. 紧凑子图布局调节，极度压缩垂直间距 (hspace)
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.12, bottom=0.11)
+    
+    academic_path = "outputs/figures/hardware_academic_profile.png"
+    plt.savefig(academic_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # ======================================================
+    # 辅助单图：依然保留，供多场景剪裁使用
+    # ======================================================
+    # 1. VRAM
+    plt.figure(figsize=(10, 5))
     for i, (gpu_id, group) in enumerate(df.groupby('GPU_ID')):
         vram_gb = group['VRAM_MB'] / 1024.0
         c = colors[i % len(colors)]
         plt.plot(group['Time_Min'], vram_gb, label=f"VRAM ({gpu_id})", color=c, linewidth=2, alpha=0.8)
-        
-    plt.xlabel("Training Time (Minutes)", fontsize=12)
-    plt.ylabel("VRAM Usage (GB)", fontsize=12)
-    plt.title("Multi-GPU VRAM Consumption over Time", fontsize=14, pad=15)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-    plt.tight_layout()
-    plt.savefig("outputs/figures/vram_usage.png", dpi=300)
+    plt.xlabel("Elapsed Time (min)", fontsize=11)
+    plt.ylabel("VRAM Usage (GB)", fontsize=11)
+    plt.title("VRAM Consumption over Time", fontsize=13, pad=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+    plt.savefig("outputs/figures/vram_usage.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    # === 图2：多卡功耗折线图 ===
-    plt.figure(figsize=(12, 6))
+    # 2. Power
+    plt.figure(figsize=(10, 5))
     for i, (gpu_id, group) in enumerate(df.groupby('GPU_ID')):
         c = colors[i % len(colors)]
         plt.plot(group['Time_Min'], group['Power_W'], label=f"Power ({gpu_id})", color=c, linewidth=2, alpha=0.8)
-        
-    plt.xlabel("Training Time (Minutes)", fontsize=12)
-    plt.ylabel("Power Draw (Watts)", fontsize=12)
-    plt.title("Multi-GPU Power Draw over Time", fontsize=14, pad=15)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-    plt.tight_layout()
-    plt.savefig("outputs/figures/power_usage.png", dpi=300)
+    plt.xlabel("Elapsed Time (min)", fontsize=11)
+    plt.ylabel("Power Draw (Watts)", fontsize=11)
+    plt.title("Power Draw over Time", fontsize=13, pad=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+    plt.savefig("outputs/figures/power_usage.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    print("\n✅ Multi-GPU Analysis Complete!")
-    print("  - VRAM Curves: outputs/figures/vram_usage.png")
-    print("  - Power Curves: outputs/figures/power_usage.png")
+    # 3. GPU Util
+    plt.figure(figsize=(10, 5))
+    for i, (gpu_id, group) in enumerate(df.groupby('GPU_ID')):
+        c = colors[i % len(colors)]
+        plt.plot(group['Time_Min'], group['GPU_Util'], label=f"Util ({gpu_id})", color=c, linewidth=2, alpha=0.8)
+    plt.xlabel("Elapsed Time (min)", fontsize=11)
+    plt.ylabel("GPU Core Utilization (%)", fontsize=11)
+    plt.title("GPU Core Utilization over Time", fontsize=13, pad=12)
+    plt.ylim(-5, 105)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+    plt.savefig("outputs/figures/gpu_utilization.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("\n✅ Hardware Profiler Analysis Complete!")
+    print(f"  - [ACADEMIC COMPLEMENT] 3x1 Shared Grid: {academic_path}")
+    print("  - Single VRAM Curve: outputs/figures/vram_usage.png")
+    print("  - Single Power Curve: outputs/figures/power_usage.png")
+    print("  - Single GPU Util Curve: outputs/figures/gpu_utilization.png")
 
 if __name__ == "__main__":
     analyze_and_plot()
