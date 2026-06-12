@@ -76,7 +76,8 @@ def main():
     trained_net, loss_history = train_model(
         geom=geom, pde_fn=pde, funcs=funcs,
         num_domain=num_domain, num_boundary=num_boundary,
-        net=net, epochs=args.epochs, batch_size=args.batch_size, profile=args.profile
+        net=net, epochs=args.epochs, batch_size=args.batch_size, 
+        precision=args.precision, profile=args.profile
     )
 
     # 5. 仅在主进程进行流场生成，防止 8 个进程同时读写 IO 冲突

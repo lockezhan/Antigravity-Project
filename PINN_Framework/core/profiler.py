@@ -21,7 +21,7 @@ class HardwareMonitor:
 
     def _monitor_loop(self):
         with open(self.log_file, "w") as f:
-            f.write("Time,Backend,GPU_ID,VRAM_MB,Power_W,Temp_C\n")
+            f.write("Time,Backend,GPU_ID,VRAM_MB,Power_W,GPU_Util\n")
             while self.running:
                 # 尝试 AMD_SMI 探测多卡
                 try:
@@ -32,10 +32,17 @@ class HardwareMonitor:
                     # 遍历探测到的所有 GPU
                     for i, handle in enumerate(devices):
                         try:
-                            temp = amdsmi.amdsmi_get_temp_metric(handle, amdsmi.AmdSmiTemperatureType.EDGE, amdsmi.AmdSmiTemperatureMetric.CURRENT)
                             power = amdsmi.amdsmi_get_power_info(handle).average_socket_power
                             vram = amdsmi.amdsmi_get_vram_usage(handle) / (1024 * 1024)
-                            f.write(f"{time.time():.2f},AMD_API,GPU_{i},{vram:.1f},{power:.1f},{temp}\n")
+                            try:
+                                activity = amdsmi.amdsmi_get_gpu_activity(handle)
+                                if isinstance(activity, dict):
+                                    util = activity.get('gfx_activity', 0)
+                                else:
+                                    util = getattr(activity, 'gfx_activity', 0)
+                            except:
+                                util = 0
+                            f.write(f"{time.time():.2f},AMD_API,GPU_{i},{vram:.1f},{power:.1f},{util:.1f}\n")
                         except:
                             pass
                     f.flush()
@@ -47,14 +54,14 @@ class HardwareMonitor:
                 # 如果 AMD_SMI 失败，尝试 nvidia-smi 探测多卡
                 try:
                     res = subprocess.check_output(
-                        ["nvidia-smi", "--query-gpu=index,memory.used,power.draw,temperature.gpu", "--format=csv,noheader,nounits"], 
+                        ["nvidia-smi", "--query-gpu=index,memory.used,power.draw,utilization.gpu", "--format=csv,noheader,nounits"], 
                         stderr=subprocess.STDOUT
                     ).decode()
                     for line in res.strip().split('\n'):
                         parts = line.split(',')
                         if len(parts) == 4:
-                            idx, vram, power, temp = parts
-                            f.write(f"{time.time():.2f},NVIDIA,GPU_{idx.strip()},{vram.strip()},{power.strip()},{temp.strip()}\n")
+                            idx, vram, power, util = parts
+                            f.write(f"{time.time():.2f},NVIDIA,GPU_{idx.strip()},{vram.strip()},{power.strip()},{util.strip()}\n")
                     f.flush()
                 except Exception:
                     # CPU 或无探测工具

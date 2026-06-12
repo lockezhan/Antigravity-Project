@@ -1,15 +1,68 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset, DistributedSampler
 import torch.distributed as dist
 import os
 from .profiler import ProfilerContext, HardwareMonitor
 
-def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, profile=False):
+class GPUDataLoader:
+    def __init__(self, tensors, batch_size, shuffle=True, is_ddp=False, local_rank=0, world_size=1):
+        self.tensors = tensors
+        self.dataset_size = tensors[0].size(0)
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.is_ddp = is_ddp
+        self.local_rank = local_rank
+        self.world_size = world_size
+        
+        if self.is_ddp:
+            self.rank_dataset_size = (self.dataset_size - self.local_rank + self.world_size - 1) // self.world_size
+        else:
+            self.rank_dataset_size = self.dataset_size
+
+    def __len__(self):
+        return (self.rank_dataset_size + self.batch_size - 1) // self.batch_size
+
+    def get_epoch_iterator(self, epoch=0):
+        if self.batch_size >= self.rank_dataset_size:
+            # 全量训练优化：直接 yield 显存原张量，避免任何索引切片和 GPU 拷贝
+            if self.is_ddp:
+                yield tuple(t[self.local_rank::self.world_size] for t in self.tensors)
+            else:
+                yield self.tensors
+            return
+
+        # 微批次采样 (Mini-batch)
+        if self.shuffle:
+            if self.is_ddp:
+                g = torch.Generator(device=self.tensors[0].device)
+                g.manual_seed(epoch)
+                perm = torch.randperm(self.dataset_size, generator=g, device=self.tensors[0].device)
+                rank_perm = perm[self.local_rank::self.world_size]
+            else:
+                rank_perm = torch.randperm(self.dataset_size, device=self.tensors[0].device)
+        else:
+            if self.is_ddp:
+                rank_perm = torch.arange(self.local_rank, self.dataset_size, self.world_size, device=self.tensors[0].device)
+            else:
+                rank_perm = torch.arange(self.dataset_size, device=self.tensors[0].device)
+
+        num_batches = len(self)
+        for i in range(num_batches):
+            start_idx = i * self.batch_size
+            end_idx = min(start_idx + self.batch_size, self.rank_dataset_size)
+            batch_perm_indices = rank_perm[start_idx:end_idx]
+            yield tuple(t[batch_perm_indices] for t in self.tensors)
+
+def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", profile=False):
     # DeepXDE 默认将全局设备设置为 cuda，这会导致 DataLoader 内部基于 CPU 的随机生成器 (Generator) 崩溃。
     # 因为我们已经在代码里手动使用了 .to(device) 转移张量，所以这里安全地将全局默认恢复为 cpu
     if hasattr(torch, 'set_default_device'):
         torch.set_default_device('cpu')
+        
+    # 根据用户指定的精度确定是否启用自动混合精度 (AMP)
+    # 如果使用 float32 模式，我们将关闭 autocast，确保高阶微分和梯度计算精度不损失
+    use_amp = (precision in ["bfloat16", "float16"])
+    amp_dtype = torch.bfloat16 if precision == "bfloat16" else torch.float16
         
     is_ddp = dist.is_initialized()
     local_rank = dist.get_rank() if is_ddp else 0
@@ -18,95 +71,175 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     net = net.to(device)
     if is_ddp:
         net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
-        
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
-    
-    # 1. 独立采样并构建 DataLoader (Mini-Batch) 以极大幅度削减系统 RAM 压力
+
     if local_rank == 0:
-        print("[Trainer] Generating collocation points...")
+        print("[Trainer] Note: torch.compile is disabled as it does not support double backward for PINNs.")
+        
+    # 【优化项 3：开启 Fused Adam】
+    # 将 Adam 内部的数十次分散的显存读写操作融合成单个 CUDA Kernel，显著降低 CPU 开销
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3, fused=(torch.cuda.is_available()))
+    
+    # 【性能核弹级优化1：提前计算目标值，彻底剔除内部循环的 CPU 拷贝与 Numpy 转换】
+    if local_rank == 0:
+        print("[Trainer] Generating collocation points and moving to GPU...")
     X_domain = geom.random_points(num_domain)
     X_bc = geom.random_boundary_points(num_boundary)
     
-    dataset_domain = TensorDataset(torch.tensor(X_domain, dtype=torch.float32))
-    dataset_bc = TensorDataset(torch.tensor(X_bc, dtype=torch.float32))
-    
-    # 启用 DistributedSampler 在多卡间分发数据
-    sampler_domain = DistributedSampler(dataset_domain) if is_ddp else None
-    sampler_bc = DistributedSampler(dataset_bc) if is_ddp else None
-    
-    loader_domain = DataLoader(dataset_domain, batch_size=batch_size, sampler=sampler_domain, shuffle=(sampler_domain is None), drop_last=False)
-    bc_batch_size = max(1, int(batch_size * (len(X_bc) / len(X_domain))))
-    loader_bc = DataLoader(dataset_bc, batch_size=bc_batch_size, sampler=sampler_bc, shuffle=(sampler_bc is None), drop_last=False)
-    
     u_func, v_func, p_func = funcs
+    # 提前在外部计算好所有边界点对应的 Ground Truth，避免在每个 Batch 中重复计算
+    U_true_np = u_func(X_bc)
+    V_true_np = v_func(X_bc)
+    P_true_np = p_func(X_bc)
+    
+    # 【性能核弹级优化2：将所有数据提前常驻显存 (GPU)，利用 DataLoader 的 GPU 内部切片消除 PCIe 带宽瓶颈】
+    tensor_domain = torch.tensor(X_domain, dtype=torch.float32, device=device)
+    tensor_bc_x = torch.tensor(X_bc, dtype=torch.float32, device=device)
+    tensor_bc_u = torch.tensor(U_true_np, dtype=torch.float32, device=device)
+    tensor_bc_v = torch.tensor(V_true_np, dtype=torch.float32, device=device)
+    tensor_bc_p = torch.tensor(P_true_np, dtype=torch.float32, device=device)
+
+    # 实例化 GPU 自定义 DataLoader，消除 PyTorch 原生 DataLoader 重复创建/销毁迭代器导致的 GPU 饥饿
+    world_size = dist.get_world_size() if is_ddp else 1
+    loader_domain = GPUDataLoader(
+        [tensor_domain], 
+        batch_size=batch_size, 
+        shuffle=True, 
+        is_ddp=is_ddp, 
+        local_rank=local_rank, 
+        world_size=world_size
+    )
+    bc_batch_size = max(1, int(batch_size * (len(tensor_bc_x) / len(tensor_domain))))
+    loader_bc = GPUDataLoader(
+        [tensor_bc_x, tensor_bc_u, tensor_bc_v, tensor_bc_p], 
+        batch_size=bc_batch_size, 
+        shuffle=True, 
+        is_ddp=is_ddp, 
+        local_rank=local_rank, 
+        world_size=world_size
+    )
     
     if local_rank == 0:
         os.makedirs("outputs/checkpoints", exist_ok=True)
-        # 传入所有 GPU 个数用于多路监控
         num_gpus = dist.get_world_size() if is_ddp else 1
         monitor = HardwareMonitor(interval=2.0, num_gpus=num_gpus)
         monitor.start()
 
     loss_history = []
     
+    # 【极致性能优化：CUDA Graph 静态图加速】
+    # 针对单卡全量训练 (Full-batch) 触发 CUDA Graph。通过将复杂的 Autograd 双重反向求导流录制为静态 GPU 指令流，
+    # 消除所有的 CPU 派发和 kernel 启动延迟，真正吃满显卡算力！
+    use_cuda_graph = torch.cuda.is_available() and not is_ddp and (len(loader_domain) == 1) and (len(loader_bc) == 1)
+    
+    if use_cuda_graph:
+        if local_rank == 0:
+            print("[Trainer] CUDA Graph is ENABLED for full-batch training acceleration!")
+            
+        # 1. 提取静态输入数据
+        domain_batch = next(iter(loader_domain.get_epoch_iterator(0)))
+        bc_batch = next(iter(loader_bc.get_epoch_iterator(0)))
+        
+        static_batch_domain = domain_batch[0].clone().detach().requires_grad_(True)
+        static_batch_bc_x = bc_batch[0].clone().detach()
+        static_batch_bc_u = bc_batch[1].clone().detach()
+        static_batch_bc_v = bc_batch[2].clone().detach()
+        static_batch_bc_p = bc_batch[3].clone().detach()
+        
+        # 2. 建立静态 Loss 缓存用于将数值传出图外
+        static_loss_pde = torch.zeros(1, device=device)
+        static_loss_bc = torch.zeros(1, device=device)
+        
+        # 3. 定义可被录制的单步计算
+        def graph_step():
+            optimizer.zero_grad(set_to_none=False)  # 静态图下必须使用 set_to_none=False 保持显存地址不变
+            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
+                # --- PDE Loss ---
+                static_batch_domain.requires_grad_(True)
+                y_pred_domain = net(static_batch_domain)
+                residuals = pde_fn(static_batch_domain, y_pred_domain)
+                loss_pde = sum(torch.mean(r**2) for r in residuals)
+                
+                # --- BC Loss ---
+                y_pred_bc = net(static_batch_bc_x)
+                u_pred, v_pred, p_pred = y_pred_bc[:, 0:1], y_pred_bc[:, 1:2], y_pred_bc[:, 2:3]
+                
+                loss_bc = torch.mean((u_pred - static_batch_bc_u)**2) + \
+                          torch.mean((v_pred - static_batch_bc_v)**2) + \
+                          torch.mean((p_pred - static_batch_bc_p)**2)
+                          
+                loss = loss_pde + loss_bc * 10.0
+                
+            loss.backward()
+            static_loss_pde.copy_(loss_pde)
+            static_loss_bc.copy_(loss_bc)
+
+        # 4. 执行 Warmup (预热以稳定显存池和 CUDA 流)
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(11):
+                graph_step()
+                optimizer.step()
+        torch.cuda.current_stream().wait_stream(s)
+        
+        # 5. 正式录制 CUDA Graph (仅包含 Forward & Loss & Backward，Optimizer 在外侧以 eager 模式最大兼容执行)
+        g = torch.cuda.CUDAGraph()
+        optimizer.zero_grad(set_to_none=False)
+        with torch.cuda.graph(g):
+            graph_step()
+
     if local_rank == 0:
         print("[Trainer] Starting custom PyTorch DDP Mini-Batch training loop...")
 
     with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir="outputs/profiling/tensorboard_traces"):
         for epoch in range(epochs):
-            if is_ddp:
-                sampler_domain.set_epoch(epoch)
-                sampler_bc.set_epoch(epoch)
-                
             net.train()
             epoch_loss_pde = 0.0
             epoch_loss_bc = 0.0
             batches = 0
             
-            for (batch_domain,), (batch_bc,) in zip(loader_domain, loader_bc):
-                batch_domain = batch_domain.to(device)
-                batch_bc = batch_bc.to(device)
-                
-                optimizer.zero_grad()
-                
-                # --- PDE Loss ---
-                batch_domain.requires_grad_(True)
-                y_pred_domain = net(batch_domain)
-                residuals = pde_fn(batch_domain, y_pred_domain)
-                loss_pde = sum(torch.mean(r**2) for r in residuals)
-                
-                # --- BC Loss ---
-                y_pred_bc = net(batch_bc)
-                u_pred, v_pred, p_pred = y_pred_bc[:, 0:1], y_pred_bc[:, 1:2], y_pred_bc[:, 2:3]
-                
-                u_true = torch.tensor(u_func(batch_bc.cpu().detach().numpy()), dtype=torch.float32, device=device)
-                v_true = torch.tensor(v_func(batch_bc.cpu().detach().numpy()), dtype=torch.float32, device=device)
-                p_true = torch.tensor(p_func(batch_bc.cpu().detach().numpy()), dtype=torch.float32, device=device)
-                
-                loss_bc = torch.mean((u_pred - u_true)**2) + \
-                          torch.mean((v_pred - v_true)**2) + \
-                          torch.mean((p_pred - p_true)**2)
-                          
-                loss = loss_pde + loss_bc * 10.0 # 增强 BC 权重
-                
-                loss.backward()
+            if use_cuda_graph:
+                # 运行录制好的 CUDA Graph
+                g.replay()
+                # 依然在 eager 模式下安全运行优化器步骤，最大化兼容性
                 optimizer.step()
                 
-                # 【核心修复】清除 DeepXDE 的全局梯度缓存！
-                # DeepXDE 的 dde.grad 为了避免重复计算，会在后台用全局字典缓存前向计算图。
-                # 由于我们使用了 DataLoader，每个 Batch 会产生新的张量，如果不清理，缓存会无限增大导致 VRAM 瞬间 OOM！
-                import deepxde as dde
-                dde.grad.clear()
-                
-                epoch_loss_pde += loss_pde.item()
-                epoch_loss_bc += loss_bc.item()
+                epoch_loss_pde += static_loss_pde.item()
+                epoch_loss_bc += static_loss_bc.item()
                 batches += 1
+            else:
+                # Eager 模式运行 (支持多 batch 与 DDP)
+                for (batch_domain,), (batch_bc_x, batch_u, batch_v, batch_p) in zip(loader_domain.get_epoch_iterator(epoch), loader_bc.get_epoch_iterator(epoch)):
+                    optimizer.zero_grad(set_to_none=True)
+                    
+                    with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
+                        # --- PDE Loss ---
+                        batch_domain.requires_grad_(True)
+                        y_pred_domain = net(batch_domain)
+                        residuals = pde_fn(batch_domain, y_pred_domain)
+                        loss_pde = sum(torch.mean(r**2) for r in residuals)
+                        
+                        # --- BC Loss ---
+                        y_pred_bc = net(batch_bc_x)
+                        u_pred, v_pred, p_pred = y_pred_bc[:, 0:1], y_pred_bc[:, 1:2], y_pred_bc[:, 2:3]
+                        
+                        loss_bc = torch.mean((u_pred - batch_u)**2) + \
+                                  torch.mean((v_pred - batch_v)**2) + \
+                                  torch.mean((p_pred - batch_p)**2)
+                                  
+                        loss = loss_pde + loss_bc * 10.0
+                    
+                    loss.backward()
+                    optimizer.step()
+                    
+                    epoch_loss_pde += loss_pde.item()
+                    epoch_loss_bc += loss_bc.item()
+                    batches += 1
             
-            # 计算当前卡上的平均 Batch Loss
             epoch_loss_pde /= max(1, batches)
             epoch_loss_bc /= max(1, batches)
             
-            # 同步各卡之间的 Loss 以用于准确的终端打印
+            # 同步各卡之间的 Loss 用于日志打印
             if is_ddp:
                 pde_t = torch.tensor(epoch_loss_pde, device=device)
                 bc_t = torch.tensor(epoch_loss_bc, device=device)
