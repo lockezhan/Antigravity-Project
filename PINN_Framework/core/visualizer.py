@@ -3,13 +3,13 @@ import numpy as np
 import torch
 import os
 
-def plot_ns_results(net, funcs, X_test):
+def plot_ns_results(net, funcs, X_test, out_dir="outputs"):
     """
-    使用传入的 X_test (测试点坐标) 和 net (已训练好的网络，已解除 DDP 包装并开启 eval) 来绘制 2D 流场。
+    使用传入 of X_test (测试点坐标) 和 net (已训练好的网络，已解除 DDP 包装并开启 eval) 来绘制 2D 流场。
     funcs: (u_func, v_func, p_func) 解析解函数
     """
     print("Generating Flow Field visualizations...")
-    os.makedirs("outputs/figures", exist_ok=True)
+    os.makedirs(f"{out_dir}/figures", exist_ok=True)
     
     # 提取函数
     u_func, v_func, p_func = funcs
@@ -70,5 +70,5 @@ def plot_ns_results(net, funcs, X_test):
         ax.set(xlabel='x', ylabel='y')
 
     plt.tight_layout()
-    plt.savefig('outputs/figures/ns_flow_field.png', dpi=300)
+    plt.savefig(f'{out_dir}/figures/ns_flow_field.png', dpi=300)
     plt.close()

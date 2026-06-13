@@ -63,11 +63,14 @@ def main():
         elif args.scale == "extreme":
             args.batch_size = 150000   # 极限压榨：大约占用 24GB VRAM (刚好塞满 4090，在 W7900 上也能跑出极高并发)
 
+    # 自动生成隔离输出目录，解决并发时文件写入竞争
+    out_dir = f"outputs_{args.scale}_{args.precision}"
+
     if local_rank == 0:
         print_hardware_info(is_ddp)
-        print(f"[Main] Scale: {args.scale.upper()} | Precision: {args.precision.upper()} | Batch: {args.batch_size}")
+        print(f"[Main] Scale: {args.scale.upper()} | Precision: {args.precision.upper()} | Batch: {args.batch_size} | Out Dir: {out_dir}")
 
-    # 2. 获取几何结构与函数，不再生成深耦合的 dde.data.PDE
+    # 2. 获取几何结构与函数，不再生成深耦合 of dde.data.PDE
     geom, pde, funcs, num_domain, num_boundary, num_test = get_ns_equation_data(scale_factor=args.scale)
 
     # 3. 构建神经网络
@@ -78,18 +81,18 @@ def main():
         geom=geom, pde_fn=pde, funcs=funcs,
         num_domain=num_domain, num_boundary=num_boundary,
         net=net, epochs=args.epochs, batch_size=args.batch_size, 
-        precision=args.precision, tol=args.tol, profile=args.profile
+        precision=args.precision, tol=args.tol, out_dir=out_dir, profile=args.profile
     )
 
     # 5. 仅在主进程进行流场生成，防止 8 个进程同时读写 IO 冲突
     if local_rank == 0:
-        print("\n[Main] Training finished. Generating 2D Navior-Stokes visualizations...")
+        print(f"\n[Main] Training finished. Generating 2D Navier-Stokes visualizations in {out_dir}...")
         
         # 因为在 custom trainer 中生成了 loss_history 列表，保存它
         import numpy as np
         import os
-        os.makedirs("outputs/figures", exist_ok=True)
-        np.savetxt("outputs/figures/loss.dat", loss_history, header="Epoch, PDE_Loss, BC_Loss", comments="")
+        os.makedirs(f"{out_dir}/figures", exist_ok=True)
+        np.savetxt(f"{out_dir}/figures/loss.dat", loss_history, header="Epoch, PDE_Loss, BC_Loss", comments="")
         
         # 为了给可视化函数喂测试数据，我们在主进程单独采样
         X_test = geom.random_points(num_test)
@@ -98,8 +101,8 @@ def main():
         base_net.eval()
         
         # 使用 visualizer 中改造过的绘制接口
-        plot_ns_results(base_net, funcs, X_test)
-        print("\n✅ All artifacts saved in outputs/ directory.")
+        plot_ns_results(base_net, funcs, X_test, out_dir=out_dir)
+        print(f"\n✅ All artifacts saved in {out_dir}/ directory.")
 
 if __name__ == "__main__":
     main()
