@@ -3,11 +3,55 @@ import time
 import threading
 import subprocess
 
+def get_active_physical_gpus(is_ddp=False):
+    """
+    获取当前运行进程实际上被分配的物理 GPU 索引列表。
+    通过解析 HIP_VISIBLE_DEVICES 或 CUDA_VISIBLE_DEVICES 环境变量，并结合 PyTorch 的当前设备来判定。
+    """
+    visible_str = os.environ.get("HIP_VISIBLE_DEVICES")
+    if visible_str is None:
+        visible_str = os.environ.get("CUDA_VISIBLE_DEVICES")
+        
+    visible_gpus = None
+    if visible_str is not None:
+        if not visible_str.strip():
+            return []
+        try:
+            visible_gpus = []
+            for x in visible_str.split(","):
+                x = x.strip()
+                if x.isdigit():
+                    visible_gpus.append(int(x))
+        except:
+            visible_gpus = None
+
+    # 如果是 DDP 模式，主进程监控当前可见的所有 GPU
+    if is_ddp:
+        return visible_gpus
+
+    # 如果是单卡模式，我们只关心 PyTorch 当前正在使用的那个物理 GPU
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logical_idx = torch.cuda.current_device()
+            if visible_gpus is not None:
+                if logical_idx < len(visible_gpus):
+                    return [visible_gpus[logical_idx]]
+                else:
+                    return [visible_gpus[0]]
+            else:
+                return [logical_idx]
+    except:
+        pass
+        
+    return [0] if visible_gpus is None else visible_gpus
+
 class HardwareMonitor:
-    def __init__(self, log_dir="outputs/profiling", interval=1.0, num_gpus=1):
+    def __init__(self, log_dir="outputs/profiling", interval=1.0, num_gpus=1, is_ddp=False):
         self.log_dir = log_dir
         self.interval = interval
         self.num_gpus = num_gpus
+        self.is_ddp = is_ddp
         self.running = False
         self.thread = None
         os.makedirs(self.log_dir, exist_ok=True)
@@ -29,6 +73,8 @@ class HardwareMonitor:
         self.thread.start()
 
     def _monitor_loop(self):
+        active_gpus = get_active_physical_gpus(self.is_ddp)
+        
         with open(self.log_file, "w") as f:
             f.write("Time,Backend,GPU_ID,VRAM_MB,Power_W,GPU_Util\n")
             while self.running:
@@ -41,6 +87,8 @@ class HardwareMonitor:
                     
                     # 遍历探测到的所有 GPU
                     for i, handle in enumerate(devices):
+                        if active_gpus is not None and i not in active_gpus:
+                            continue
                         try:
                             power = amdsmi.amdsmi_get_power_info(handle).average_socket_power
                             vram = amdsmi.amdsmi_get_vram_usage(handle) / (1024 * 1024)
@@ -71,6 +119,13 @@ class HardwareMonitor:
                             # 过滤出以数字开头的行（设备数据行，如 "0       2     0x744b, ..."）
                             if len(parts) >= 12 and parts[0].isdigit():
                                 idx = parts[0]
+                                try:
+                                    idx_int = int(idx)
+                                except:
+                                    idx_int = -1
+                                if active_gpus is not None and idx_int not in active_gpus:
+                                    continue
+                                    
                                 gpu_util_str = parts[-1].replace('%', '')
                                 vram_pct_str = parts[-2].replace('%', '')
                                 power_str = parts[-11].replace('W', '')
@@ -106,6 +161,12 @@ class HardwareMonitor:
                                 parts = line.split(',')
                                 if len(parts) == 4:
                                     idx, vram, power, util = parts
+                                    try:
+                                        idx_int = int(idx.strip())
+                                    except:
+                                        idx_int = -1
+                                    if active_gpus is not None and idx_int not in active_gpus:
+                                        continue
                                     f.write(f"{time.time():.2f},NVIDIA,GPU_{idx.strip()},{vram.strip()},{power.strip()},{util.strip()}\n")
                             f.flush()
                         except Exception:

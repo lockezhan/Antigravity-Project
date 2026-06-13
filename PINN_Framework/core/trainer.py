@@ -121,7 +121,7 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     if local_rank == 0:
         os.makedirs(f"{out_dir}/checkpoints", exist_ok=True)
         num_gpus = dist.get_world_size() if is_ddp else 1
-        monitor = HardwareMonitor(log_dir=f"{out_dir}/profiling", interval=2.0, num_gpus=num_gpus)
+        monitor = HardwareMonitor(log_dir=f"{out_dir}/profiling", interval=2.0, num_gpus=num_gpus, is_ddp=is_ddp)
         monitor.start()
 
     loss_history = []
