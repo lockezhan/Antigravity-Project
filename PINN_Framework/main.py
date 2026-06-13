@@ -20,6 +20,7 @@ def parse_args():
     parser.add_argument("--profile", action="store_true", help="Enable PyTorch Profiler for performance tracing")
     parser.add_argument("--batch_size", type=int, default=0, help="Mini-batch size. 0 means auto-scale to saturate GPU based on scale.")
     parser.add_argument("--tol", type=float, default=-1.0, help="Convergence tolerance for early stopping. -1.0 means disabled.")
+    parser.add_argument("--out_dir", type=str, default="", help="Custom output directory. If empty, auto-generates based on scale & precision.")
     return parser.parse_args()
 
 def init_distributed():
@@ -64,7 +65,10 @@ def main():
             args.batch_size = 150000   # 极限压榨：大约占用 24GB VRAM (刚好塞满 4090，在 W7900 上也能跑出极高并发)
 
     # 自动生成隔离输出目录，解决并发时文件写入竞争
-    out_dir = f"outputs_{args.scale}_{args.precision}"
+    if args.out_dir:
+        out_dir = args.out_dir
+    else:
+        out_dir = f"outputs_{args.scale}_{args.precision}"
 
     if local_rank == 0:
         print_hardware_info(is_ddp)
