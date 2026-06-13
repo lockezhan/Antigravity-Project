@@ -53,7 +53,7 @@ class GPUDataLoader:
             batch_perm_indices = rank_perm[start_idx:end_idx]
             yield tuple(t[batch_perm_indices] for t in self.tensors)
 
-def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", tol=-1.0, profile=False):
+def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", tol=-1.0, out_dir="outputs", profile=False):
     # DeepXDE 默认将全局设备设置为 cuda，这会导致 DataLoader 内部基于 CPU 的随机生成器 (Generator) 崩溃。
     # 因为我们已经在代码里手动使用了 .to(device) 转移张量，所以这里安全地将全局默认恢复为 cpu
     if hasattr(torch, 'set_default_device'):
@@ -119,9 +119,9 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     )
     
     if local_rank == 0:
-        os.makedirs("outputs/checkpoints", exist_ok=True)
+        os.makedirs(f"{out_dir}/checkpoints", exist_ok=True)
         num_gpus = dist.get_world_size() if is_ddp else 1
-        monitor = HardwareMonitor(interval=2.0, num_gpus=num_gpus)
+        monitor = HardwareMonitor(log_dir=f"{out_dir}/profiling", interval=2.0, num_gpus=num_gpus)
         monitor.start()
 
     loss_history = []
@@ -191,7 +191,7 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     if local_rank == 0:
         print("[Trainer] Starting custom PyTorch DDP Mini-Batch training loop...")
 
-    with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir="outputs/profiling/tensorboard_traces"):
+    with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir=f"{out_dir}/profiling/tensorboard_traces"):
         for epoch in range(epochs):
             net.train()
             epoch_loss_pde = 0.0
@@ -259,7 +259,7 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
                 print(f"Epoch {epoch:5d} | PDE Loss: {epoch_loss_pde:.4e} | BC Loss: {epoch_loss_bc:.4e}")
                 loss_history.append((epoch, epoch_loss_pde, epoch_loss_bc))
                 if epoch % 1000 == 0:
-                    torch.save(net.state_dict(), f"outputs/checkpoints/model_ep{epoch}.pt")
+                    torch.save(net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
 
     if local_rank == 0:
         monitor.stop()

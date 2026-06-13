@@ -2,8 +2,8 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def analyze_and_plot():
-    log_file = "outputs/profiling/hardware_metrics.log"
+def analyze_and_plot(out_dir="outputs"):
+    log_file = os.path.join(out_dir, "profiling/hardware_metrics.log")
     if not os.path.exists(log_file):
         print(f"Error: Log file {log_file} not found.")
         return
@@ -30,7 +30,8 @@ def analyze_and_plot():
     t0 = df['Time'].min()
     df['Time_Min'] = (df['Time'] - t0) / 60.0 # 转换为经过的分钟数
     
-    os.makedirs("outputs/figures", exist_ok=True)
+    figures_dir = os.path.join(out_dir, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
     
     # 学术配色
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
@@ -107,7 +108,7 @@ def analyze_and_plot():
     plt.tight_layout()
     plt.subplots_adjust(hspace=0.12, bottom=0.11)
     
-    academic_path = "outputs/figures/hardware_academic_profile.png"
+    academic_path = os.path.join(figures_dir, "hardware_academic_profile.png")
     plt.savefig(academic_path, dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -125,7 +126,7 @@ def analyze_and_plot():
     plt.title("VRAM Consumption over Time", fontsize=13, pad=12)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    plt.savefig("outputs/figures/vram_usage.png", dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(figures_dir, "vram_usage.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
     # 2. Power
@@ -138,7 +139,7 @@ def analyze_and_plot():
     plt.title("Power Draw over Time", fontsize=13, pad=12)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    plt.savefig("outputs/figures/power_usage.png", dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(figures_dir, "power_usage.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
     # 3. GPU Util
@@ -152,14 +153,18 @@ def analyze_and_plot():
     plt.ylim(-5, 105)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    plt.savefig("outputs/figures/gpu_utilization.png", dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(figures_dir, "gpu_utilization.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
     print("\n✅ Hardware Profiler Analysis Complete!")
     print(f"  - [ACADEMIC COMPLEMENT] 3x1 Shared Grid: {academic_path}")
-    print("  - Single VRAM Curve: outputs/figures/vram_usage.png")
-    print("  - Single Power Curve: outputs/figures/power_usage.png")
-    print("  - Single GPU Util Curve: outputs/figures/gpu_utilization.png")
+    print(f"  - Single VRAM Curve: {os.path.join(figures_dir, 'vram_usage.png')}")
+    print(f"  - Single Power Curve: {os.path.join(figures_dir, 'power_usage.png')}")
+    print(f"  - Single GPU Util Curve: {os.path.join(figures_dir, 'gpu_utilization.png')}")
 
 if __name__ == "__main__":
-    analyze_and_plot()
+    import argparse
+    parser = argparse.ArgumentParser(description="Analyze hardware metrics for PINN training")
+    parser.add_argument("--dir", type=str, default="outputs", help="Directory containing the logs and where plots will be saved")
+    args = parser.parse_args()
+    analyze_and_plot(args.dir)
