@@ -99,7 +99,7 @@ def get_ns_equation_data(scale_factor="small"):
     if scale_factor == "small":
         num_domain, num_boundary, num_test = 2000, 200, 2000
     elif scale_factor == "large":
-        num_domain, num_boundary, num_test = 80000, 8000, 10000
+        num_domain, num_boundary, num_test = 400000, 20000, 50000
     elif scale_factor == "extreme":
         num_domain, num_boundary, num_test = 1000000, 100000, 200000
     else:
