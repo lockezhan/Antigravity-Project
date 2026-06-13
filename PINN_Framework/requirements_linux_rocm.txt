@@ -4,3 +4,4 @@ numpy<2.0.0
 matplotlib
 scipy
 amdsmi  # amd_smi python library (if not already in image)
+pandas
