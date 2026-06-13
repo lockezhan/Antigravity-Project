@@ -53,7 +53,7 @@ class GPUDataLoader:
             batch_perm_indices = rank_perm[start_idx:end_idx]
             yield tuple(t[batch_perm_indices] for t in self.tensors)
 
-def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", profile=False):
+def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", tol=-1.0, profile=False):
     # DeepXDE 默认将全局设备设置为 cuda，这会导致 DataLoader 内部基于 CPU 的随机生成器 (Generator) 崩溃。
     # 因为我们已经在代码里手动使用了 .to(device) 转移张量，所以这里安全地将全局默认恢复为 cpu
     if hasattr(torch, 'set_default_device'):
@@ -247,6 +247,13 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
                 dist.all_reduce(bc_t, op=dist.ReduceOp.AVG)
                 epoch_loss_pde = pde_t.item()
                 epoch_loss_bc = bc_t.item()
+            
+            # 早停机制 (Early Stopping)：基于收敛容差 tol 自动判断退出
+            total_loss = epoch_loss_pde + epoch_loss_bc
+            if tol > 0 and total_loss < tol:
+                if local_rank == 0:
+                    print(f"\n[Trainer] Convergence reached at epoch {epoch}: Total Loss {total_loss:.4e} < tol {tol:.4e}. Early stopping...")
+                break
             
             if local_rank == 0 and epoch % 100 == 0:
                 print(f"Epoch {epoch:5d} | PDE Loss: {epoch_loss_pde:.4e} | BC Loss: {epoch_loss_bc:.4e}")

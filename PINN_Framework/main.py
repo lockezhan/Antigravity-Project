@@ -19,6 +19,7 @@ def parse_args():
                         help="Precision format. Note: float16 underflows Hessian. bfloat16 recommended for ROCm.")
     parser.add_argument("--profile", action="store_true", help="Enable PyTorch Profiler for performance tracing")
     parser.add_argument("--batch_size", type=int, default=0, help="Mini-batch size. 0 means auto-scale to saturate GPU based on scale.")
+    parser.add_argument("--tol", type=float, default=-1.0, help="Convergence tolerance for early stopping. -1.0 means disabled.")
     return parser.parse_args()
 
 def init_distributed():
@@ -77,7 +78,7 @@ def main():
         geom=geom, pde_fn=pde, funcs=funcs,
         num_domain=num_domain, num_boundary=num_boundary,
         net=net, epochs=args.epochs, batch_size=args.batch_size, 
-        precision=args.precision, profile=args.profile
+        precision=args.precision, tol=args.tol, profile=args.profile
     )
 
     # 5. 仅在主进程进行流场生成，防止 8 个进程同时读写 IO 冲突
