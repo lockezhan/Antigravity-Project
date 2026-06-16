@@ -22,6 +22,7 @@ def parse_args():
     parser.add_argument("--tol", type=float, default=-1.0, help="Convergence tolerance for early stopping. -1.0 means disabled.")
     parser.add_argument("--out_dir", type=str, default="", help="Custom output directory. If empty, auto-generates based on scale & precision.")
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint model file (.pt) to resume training from.")
+    parser.add_argument("--time_limit", type=float, default=-1.0, help="Maximum training time limit in seconds. Default is -1.0 (no limit).")
     return parser.parse_args()
 
 def init_distributed():
@@ -107,7 +108,7 @@ def main():
         num_domain=num_domain, num_boundary=num_boundary,
         net=net, epochs=args.epochs, batch_size=args.batch_size, 
         precision=args.precision, tol=args.tol, out_dir=out_dir, profile=args.profile,
-        start_epoch=start_epoch
+        start_epoch=start_epoch, time_limit=args.time_limit
     )
 
     # 5. 仅在主进程进行流场生成，防止 8 个进程同时读写 IO 冲突

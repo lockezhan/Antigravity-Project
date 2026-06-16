@@ -53,7 +53,9 @@ class GPUDataLoader:
             batch_perm_indices = rank_perm[start_idx:end_idx]
             yield tuple(t[batch_perm_indices] for t in self.tensors)
 
-def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", tol=-1.0, out_dir="outputs", profile=False, start_epoch=0):
+def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", tol=-1.0, out_dir="outputs", profile=False, start_epoch=0, time_limit=-1.0):
+    import time
+    start_time = time.time()
     # DeepXDE 默认将全局设备设置为 cuda，这会导致 DataLoader 内部基于 CPU 的随机生成器 (Generator) 崩溃。
     # 因为我们已经在代码里手动使用了 .to(device) 转移张量，所以这里安全地将全局默认恢复为 cpu
     if hasattr(torch, 'set_default_device'):
@@ -198,6 +200,12 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
 
     with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir=f"{out_dir}/profiling/tensorboard_traces"):
         for epoch in range(start_epoch, start_epoch + epochs):
+            # 检查时间限制，防范多卡 DDP 异步锁死，所有 rank 协同退出
+            if time_limit > 0 and (time.time() - start_time) > time_limit:
+                if local_rank == 0:
+                    print(f"\n[Trainer] Time limit of {time_limit:.1f}s reached at epoch {epoch}. Saving checkpoint and exiting gracefully...")
+                    torch.save(net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
+                break
             net.train()
             epoch_loss_pde = 0.0
             epoch_loss_bc = 0.0
