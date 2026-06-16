@@ -26,6 +26,14 @@ def analyze_and_plot(out_dir="outputs"):
         print("No valid distributed hardware data found.")
         return
         
+    # 自动探测平台后端，决定首选的 VRAM 上限线
+    backend = "ROCM_SMI"
+    if not df.empty and 'Backend' in df.columns:
+        backend_series = df['Backend'].dropna()
+        if not backend_series.empty:
+            backend = backend_series.iloc[0]
+    is_amd = "AMD" in backend or "ROCM" in backend
+        
     # 1. 相对时间轴（Relative Time）取代绝对时间戳
     t0 = df['Time'].min()
     df['Time_Min'] = (df['Time'] - t0) / 60.0 # 转换为经过的分钟数
@@ -54,18 +62,23 @@ def analyze_and_plot(out_dir="outputs"):
         c = colors[i % len(colors)]
         axs[0].plot(group['Time_Min'], vram_gb, label=f"GPU {gpu_id.split('_')[-1]}", color=c, linewidth=1.5, alpha=0.85)
         
-    # 3. 绘制 OOM 关键物理边界红虚线
-    axs[0].axhline(y=24.0, color='r', linestyle='--', linewidth=1.2, alpha=0.85)
-    axs[0].text(df['Time_Min'].max() * 0.98, 24.3, "NVIDIA RTX 4090 VRAM Limit (24GB)", color='r', fontsize=8, ha='right', va='bottom', fontweight='semibold')
-    
-    # 如果数据突破了 24GB，则自动画出 AMD W7900 (48GB) 的限制线，形成强烈的“破线”对比感
+    # 3. 绘制 OOM 关键物理边界虚线
     max_vram_gb = df['VRAM_MB'].max() / 1024.0
-    if max_vram_gb > 24.0:
-        axs[0].axhline(y=48.0, color='darkblue', linestyle='--', linewidth=1.2, alpha=0.85)
-        axs[0].text(df['Time_Min'].max() * 0.98, 48.3, "AMD W7900 VRAM Limit (48GB)", color='darkblue', fontsize=8, ha='right', va='bottom', fontweight='semibold')
-        axs[0].set_ylim(0, max(52.0, max_vram_gb * 1.15))
+    if is_amd:
+        limit_y = 48.0
+        label = "AMD W7900 VRAM Limit (48GB)"
+        color = "darkblue"
     else:
-        axs[0].set_ylim(0, 28.0) # 留出 24GB 线之上的余量空间
+        limit_y = 24.0
+        label = "NVIDIA RTX 4090 VRAM Limit (24GB)"
+        color = "r"
+        
+    axs[0].axhline(y=limit_y, color=color, linestyle='--', linewidth=1.2, alpha=0.85)
+    axs[0].text(df['Time_Min'].max() * 0.98, limit_y + 0.5, label, color=color, fontsize=8, ha='right', va='bottom', fontweight='semibold')
+    
+    # 动态适应 Y 轴高度范围
+    y_max = max(limit_y * 1.15, max_vram_gb * 1.15)
+    axs[0].set_ylim(0, y_max)
         
     axs[0].set_ylabel("VRAM Usage [GB]", fontsize=11, fontweight='semibold')
     axs[0].set_title("(a) Memory Footprint & Physical Boundaries", fontsize=12, fontweight='bold', pad=8)
