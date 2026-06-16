@@ -101,6 +101,14 @@ if [ -d "$CKPT_DIR" ]; then
     fi
 fi
 
+# Configure local git user if not set, to prevent commit failure
+if ! git config user.email >/dev/null 2>&1; then
+    git config user.email "benchmark-bot@example.com"
+fi
+if ! git config user.name >/dev/null 2>&1; then
+    git config user.name "Benchmark Bot"
+fi
+
 # Stage files for git
 git add "$OUT_DIR/figures/" "$OUT_DIR/profiling/"
 if [ -d "$CKPT_DIR" ]; then
