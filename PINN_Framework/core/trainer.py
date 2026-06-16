@@ -79,6 +79,11 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     # 将 Adam 内部的数十次分散的显存读写操作融合成单个 CUDA Kernel，显著降低 CPU 开销
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-3, fused=(torch.cuda.is_available()))
     
+    # 引入余弦退火学习率调度器，从 1e-3 降至 1e-5，精细微调后期收敛精度，支持断点续训
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=(start_epoch + epochs), eta_min=1e-5, last_epoch=start_epoch - 1
+    )
+    
     # 【性能核弹级优化1：提前计算目标值，彻底剔除内部循环的 CPU 拷贝与 Numpy 转换】
     if local_rank == 0:
         print("[Trainer] Generating collocation points and moving to GPU...")
@@ -247,6 +252,9 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
                 dist.all_reduce(bc_t, op=dist.ReduceOp.AVG)
                 epoch_loss_pde = pde_t.item()
                 epoch_loss_bc = bc_t.item()
+            
+            # 步进学习率调度器，随 Epoch 衰减以微调收敛精度
+            scheduler.step()
             
             # 早停机制 (Early Stopping)：基于收敛容差 tol 自动判断退出
             total_loss = epoch_loss_pde + epoch_loss_bc
