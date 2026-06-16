@@ -121,6 +121,12 @@ git commit -m "$COMMIT_MSG" || echo "No changes to commit."
 
 # Push to GitHub
 BRANCH=$(git symbolic-ref --short -q HEAD)
+
+# Stash any local modifications to tracked files (like chmod +x changes or script micro-edits)
+# to guarantee a clean workspace for git pull --rebase
+echo "📦 Stashing any local changes/filemode changes..."
+git stash -q || true
+
 if [ -n "$PUSH_TOKEN" ]; then
     echo "🚀 Pushing changes to GitHub using Personal Access Token..."
     # 先进行 pull --rebase，防止并行测试推送时产生的 Non-fast-forward 冲突
@@ -133,6 +139,10 @@ else
     git pull --rebase origin "$BRANCH" || echo "Rebase skipped."
     git push origin "$BRANCH" -u
 fi
+
+# Restore stashed local changes
+echo "📦 Restoring local changes..."
+git stash pop -q || true
 
 echo "============================================="
 echo "🎉 Scheduled Run and Push complete!"
