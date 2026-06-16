@@ -56,6 +56,11 @@ echo "  - Time Limit: $TIME_LIMIT seconds (~$(echo "scale=2; $TIME_LIMIT/3600" |
 echo "  - Output Directory: $OUT_DIR"
 echo "============================================="
 
+echo "📦 Upgrading pip..."
+pip install --upgrade pip
+echo "📦 Installing/checking dependencies..."
+pip install -r requirements_linux_rocm.txt
+
 export HIP_VISIBLE_DEVICES=$GPUS
 export CUDA_VISIBLE_DEVICES=$GPUS
 
