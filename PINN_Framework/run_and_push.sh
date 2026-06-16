@@ -13,6 +13,7 @@ TIME_LIMIT=13200  # Default 3 hours 40 minutes (13200 seconds)
 RESUME=""
 TOKEN=""
 PORT=29500
+OUT_DIR=""
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -26,6 +27,7 @@ while [[ "$#" -gt 0 ]]; do
         --resume) RESUME="$2"; shift ;;
         --token) TOKEN="$2"; shift ;;
         --port) PORT="$2"; shift ;;
+        --out_dir) OUT_DIR="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -41,7 +43,7 @@ PUSH_TOKEN=${TOKEN:-$GITHUB_TOKEN}
 
 # Calculate number of GPUs
 NUM_GPUS=$(echo $GPUS | tr ',' '\n' | wc -l)
-OUT_DIR="outputs_${SCALE}_${PRECISION}"
+OUT_DIR=${OUT_DIR:-"outputs_${SCALE}_${PRECISION}"}
 
 echo "============================================="
 echo "🚀 Starting Scheduled PINN Run with Time Limit"
