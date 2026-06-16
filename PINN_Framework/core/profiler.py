@@ -75,8 +75,10 @@ class HardwareMonitor:
     def _monitor_loop(self):
         active_gpus = get_active_physical_gpus(self.is_ddp)
         
-        with open(self.log_file, "w") as f:
-            f.write("Time,Backend,GPU_ID,VRAM_MB,Power_W,GPU_Util\n")
+        file_exists = os.path.exists(self.log_file) and os.path.getsize(self.log_file) > 0
+        with open(self.log_file, "a") as f:
+            if not file_exists:
+                f.write("Time,Backend,GPU_ID,VRAM_MB,Power_W,GPU_Util\n")
             while self.running:
                 # 优先尝试 amdsmi (Python API)
                 amdsmi_success = False

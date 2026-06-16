@@ -118,7 +118,23 @@ def main():
         import numpy as np
         import os
         os.makedirs(f"{out_dir}/figures", exist_ok=True)
-        np.savetxt(f"{out_dir}/figures/loss.dat", loss_history, header="Epoch, PDE_Loss, BC_Loss", comments="")
+        
+        # 断点续训时自动融合旧的 Loss 记录，避免覆盖丢失
+        loss_file_path = f"{out_dir}/figures/loss.dat"
+        if start_epoch > 0 and os.path.exists(loss_file_path):
+            try:
+                old_loss = np.loadtxt(loss_file_path, skiprows=1)
+                if len(old_loss.shape) == 1:
+                    old_loss = old_loss.reshape(1, -1)
+                # 仅保留小于当前 start_epoch 的记录，防止重叠
+                old_loss = old_loss[old_loss[:, 0] < start_epoch]
+                old_list = [tuple(row) for row in old_loss]
+                loss_history = old_list + loss_history
+                print(f"[Main] Merged {len(old_list)} historical loss entries from previous run.")
+            except Exception as e:
+                print(f"[Main] Warning: Could not merge old loss history: {e}")
+                
+        np.savetxt(loss_file_path, loss_history, header="Epoch, PDE_Loss, BC_Loss", comments="")
         
         # 为了给可视化函数喂测试数据，我们在主进程单独采样
         X_test = geom.random_points(num_test)
