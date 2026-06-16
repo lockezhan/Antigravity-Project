@@ -105,16 +105,18 @@ COMMIT_MSG="chore: auto-save benchmark results scale=${SCALE} precision=${PRECIS
 git commit -m "$COMMIT_MSG" || echo "No changes to commit."
 
 # Push to GitHub
+BRANCH=$(git symbolic-ref --short -q HEAD)
 if [ -n "$PUSH_TOKEN" ]; then
     echo "🚀 Pushing changes to GitHub using Personal Access Token..."
-    # Obtain current branch name
-    BRANCH=$(git symbolic-ref --short -q HEAD)
-    # Push using Token-embedded HTTPS URL
-    git push "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" -u --force
+    # 先进行 pull --rebase，防止并行测试推送时产生的 Non-fast-forward 冲突
+    git pull --rebase "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" || echo "Rebase skipped or no remote changes."
+    # Push using Token-embedded HTTPS URL (去掉了 --force，防止覆盖其他并行进程的提交)
+    git push "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" -u
     echo "✅ Push successful!"
 else
     echo "⚠️ GITHUB_TOKEN not set. Attempting standard git push..."
-    git push origin $(git symbolic-ref --short -q HEAD) -u
+    git pull --rebase origin "$BRANCH" || echo "Rebase skipped."
+    git push origin "$BRANCH" -u
 fi
 
 echo "============================================="
