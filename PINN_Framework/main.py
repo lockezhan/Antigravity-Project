@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=0, help="Mini-batch size. 0 means auto-scale to saturate GPU based on scale.")
     parser.add_argument("--tol", type=float, default=-1.0, help="Convergence tolerance for early stopping. -1.0 means disabled.")
     parser.add_argument("--out_dir", type=str, default="", help="Custom output directory. If empty, auto-generates based on scale & precision.")
+    parser.add_argument("--resume", type=str, default="", help="Path to checkpoint model file (.pt) to resume training from.")
     return parser.parse_args()
 
 def init_distributed():
@@ -80,12 +81,33 @@ def main():
     # 3. 构建神经网络
     net = build_network(scale_factor=args.scale, precision=args.precision)
 
+    start_epoch = 0
+    if args.resume:
+        if os.path.exists(args.resume):
+            # map_location="cpu" to safely load onto CPU before placing on DDP GPU
+            checkpoint_state = torch.load(args.resume, map_location="cpu")
+            net.load_state_dict(checkpoint_state)
+            if local_rank == 0:
+                print(f"[Main] Successfully loaded checkpoint weights from {args.resume}")
+            
+            # 尝试从文件名解析起始 epoch，例如 "model_ep5000.pt"
+            import re
+            match = re.search(r"model_ep(\d+)\.pt", os.path.basename(args.resume))
+            if match:
+                start_epoch = int(match.group(1))
+                if local_rank == 0:
+                    print(f"[Main] Detected start epoch from checkpoint filename: {start_epoch}")
+        else:
+            if local_rank == 0:
+                print(f"[Main] Error: Checkpoint file {args.resume} not found!")
+
     # 4. 执行 DDP/单卡自适应的自定义 PyTorch 训练循环
     trained_net, loss_history = train_model(
         geom=geom, pde_fn=pde, funcs=funcs,
         num_domain=num_domain, num_boundary=num_boundary,
         net=net, epochs=args.epochs, batch_size=args.batch_size, 
-        precision=args.precision, tol=args.tol, out_dir=out_dir, profile=args.profile
+        precision=args.precision, tol=args.tol, out_dir=out_dir, profile=args.profile,
+        start_epoch=start_epoch
     )
 
     # 5. 仅在主进程进行流场生成，防止 8 个进程同时读写 IO 冲突
