@@ -8,7 +8,7 @@ import torch.distributed as dist
 from core.pde_def import get_ns_equation_data
 from core.network import build_network
 from core.trainer import train_model
-from core.visualizer import plot_ns_results
+from core.visualizer import plot_ns_results, plot_loss_curve
 
 def parse_args():
     parser = argparse.ArgumentParser(description="PINN Framework with 8-GPU DDP Support")
@@ -106,6 +106,7 @@ def main():
         
         # 使用 visualizer 中改造过的绘制接口
         plot_ns_results(base_net, funcs, X_test, out_dir=out_dir)
+        plot_loss_curve(loss_history, out_dir=out_dir)
         print(f"\n✅ All artifacts saved in {out_dir}/ directory.")
 
 if __name__ == "__main__":
