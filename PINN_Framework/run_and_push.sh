@@ -2,6 +2,7 @@
 # run_and_push.sh - Run PINN benchmark with time limit and auto-push latest results to GitHub
 
 set -e
+export PYTHONUNBUFFERED=1
 
 # Default values
 SCALE="large"
