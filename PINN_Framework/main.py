@@ -3,6 +3,7 @@ import os
 os.environ["DDE_BACKEND"] = "pytorch"
 
 import argparse
+import numpy as np
 import torch
 import torch.distributed as dist
 from core.pde_def import get_ns_equation_data
@@ -116,8 +117,6 @@ def main():
         print(f"\n[Main] Training finished. Generating 2D Navier-Stokes visualizations in {out_dir}...")
         
         # 因为在 custom trainer 中生成了 loss_history 列表，保存它
-        import numpy as np
-        import os
         os.makedirs(f"{out_dir}/figures", exist_ok=True)
         
         # 从实时不断追加生成的 loss.dat 中直接读取完整记录用于绘制最终收敛图
