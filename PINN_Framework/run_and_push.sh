@@ -113,11 +113,18 @@ if ! git config user.name >/dev/null 2>&1; then
 fi
 
 # Stage files for git
+# Generate hardware profiling graphs before pushing
+if [ -d "$OUT_DIR/profiling" ]; then
+    echo "📊 Generating hardware profiling graphs..."
+    python3 analyze_hardware.py --dir "$OUT_DIR" || true
+fi
+
 # Using flock to ensure multiple concurrent scripts don't conflict during git operations
 (
   flock -n 200 || { echo "🔒 Waiting for other PINN tests to finish Git operations..."; flock 200; }
 
-  git add "$OUT_DIR/figures/" "$OUT_DIR/profiling/"
+  # Force add profiling logs and generated graphs (since outputs/profiling/ is in .gitignore)
+  git add -f "$OUT_DIR/figures/" "$OUT_DIR/profiling/"
   if [ -d "$CKPT_DIR" ]; then
       # Force add because *.pt is in .gitignore
       git add -f "$CKPT_DIR"
