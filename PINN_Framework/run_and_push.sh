@@ -119,7 +119,7 @@ if [ -d "$CKPT_DIR" ]; then
 fi
 
 # Commit changes
-COMMIT_MSG="chore: auto-save benchmark results scale=${SCALE} precision=${PRECISION} date=\$(date +'%Y-%m-%d %H:%M:%S')"
+COMMIT_MSG="chore: auto-save benchmark results scale=${SCALE} precision=${PRECISION} gpus=${NUM_GPUS} date=$(date +'%Y-%m-%d %H:%M:%S')"
 git commit -m "$COMMIT_MSG" || echo "No changes to commit."
 
 # Push to GitHub
