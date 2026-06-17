@@ -46,7 +46,7 @@ PUSH_TOKEN=${TOKEN:-$GITHUB_TOKEN}
 
 # Calculate number of GPUs
 NUM_GPUS=$(echo $GPUS | tr ',' '\n' | wc -l)
-OUT_DIR=${OUT_DIR:-"outputs_${SCALE}_${PRECISION}"}
+OUT_DIR=${OUT_DIR:-"outputs_${SCALE}_${PRECISION}_${NUM_GPUS}gpus"}
 
 echo "============================================="
 echo "🚀 Starting Scheduled PINN Run with Time Limit"
