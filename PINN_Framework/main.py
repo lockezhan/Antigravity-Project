@@ -88,7 +88,9 @@ def main():
         if os.path.exists(args.resume):
             # map_location="cpu" to safely load onto CPU before placing on DDP GPU
             checkpoint_state = torch.load(args.resume, map_location="cpu")
-            net.load_state_dict(checkpoint_state)
+            # Clean "module." prefix if the checkpoint was saved from a DDP model
+            cleaned_state = {k.replace("module.", ""): v for k, v in checkpoint_state.items()}
+            net.load_state_dict(cleaned_state)
             if local_rank == 0:
                 print(f"[Main] Successfully loaded checkpoint weights from {args.resume}")
             
