@@ -14,6 +14,7 @@ RESUME=""
 TOKEN=""
 PORT=29500
 OUT_DIR=""
+PROXY=""
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -28,6 +29,7 @@ while [[ "$#" -gt 0 ]]; do
         --token) TOKEN="$2"; shift ;;
         --port) PORT="$2"; shift ;;
         --out_dir) OUT_DIR="$2"; shift ;;
+        --proxy) PROXY="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -127,17 +129,53 @@ BRANCH=$(git symbolic-ref --short -q HEAD)
 echo "📦 Stashing any local changes/filemode changes..."
 git stash -q || true
 
+if [ -n "$PROXY" ]; then
+    echo "🌐 Using Proxy: $PROXY for Git operations"
+    export http_proxy=$PROXY
+    export https_proxy=$PROXY
+    export HTTP_PROXY=$PROXY
+    export HTTPS_PROXY=$PROXY
+    export all_proxy=$PROXY
+fi
+
+MAX_RETRIES=5
+RETRY_COUNT=0
+PUSH_SUCCESS=0
+
 if [ -n "$PUSH_TOKEN" ]; then
     echo "🚀 Pushing changes to GitHub using Personal Access Token..."
-    # 先进行 pull --rebase，防止并行测试推送时产生的 Non-fast-forward 冲突
-    git pull --rebase "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" || echo "Rebase skipped or no remote changes."
-    # Push using Token-embedded HTTPS URL (去掉了 --force，防止覆盖其他并行进程的提交)
-    git push "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" -u
-    echo "✅ Push successful!"
 else
     echo "⚠️ GITHUB_TOKEN not set. Attempting standard git push..."
-    git pull --rebase origin "$BRANCH" || echo "Rebase skipped."
-    git push origin "$BRANCH" -u
+fi
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    echo "🔄 Attempt $((RETRY_COUNT+1))/$MAX_RETRIES for Git Pull & Push..."
+    
+    if [ -n "$PUSH_TOKEN" ]; then
+        # 先进行 pull --rebase，防止并行测试推送时产生的 Non-fast-forward 冲突
+        git pull --rebase "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" || echo "Rebase skipped or no remote changes."
+        # Push using Token-embedded HTTPS URL (去掉了 --force，防止覆盖其他并行进程的提交)
+        if git push "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" -u; then
+            PUSH_SUCCESS=1
+            break
+        fi
+    else
+        git pull --rebase origin "$BRANCH" || echo "Rebase skipped."
+        if git push origin "$BRANCH" -u; then
+            PUSH_SUCCESS=1
+            break
+        fi
+    fi
+    
+    echo "❌ Push failed, network might be unstable. Retrying in 15 seconds..."
+    sleep 15
+    RETRY_COUNT=$((RETRY_COUNT+1))
+done
+
+if [ $PUSH_SUCCESS -eq 1 ]; then
+    echo "✅ Push successful!"
+else
+    echo "❌ Push failed after $MAX_RETRIES attempts."
 fi
 
 # Restore stashed local changes
