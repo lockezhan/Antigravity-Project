@@ -113,75 +113,82 @@ if ! git config user.name >/dev/null 2>&1; then
 fi
 
 # Stage files for git
-git add "$OUT_DIR/figures/" "$OUT_DIR/profiling/"
-if [ -d "$CKPT_DIR" ]; then
-    git add "$CKPT_DIR"
-fi
+# Using flock to ensure multiple concurrent scripts don't conflict during git operations
+(
+  flock -n 200 || { echo "🔒 Waiting for other PINN tests to finish Git operations..."; flock 200; }
 
-# Commit changes
-COMMIT_MSG="chore: auto-save benchmark results scale=${SCALE} precision=${PRECISION} gpus=${NUM_GPUS} date=$(date +'%Y-%m-%d %H:%M:%S')"
-git commit -m "$COMMIT_MSG" || echo "No changes to commit."
+  git add "$OUT_DIR/figures/" "$OUT_DIR/profiling/"
+  if [ -d "$CKPT_DIR" ]; then
+      # Force add because *.pt is in .gitignore
+      git add -f "$CKPT_DIR"
+  fi
 
-# Push to GitHub
-BRANCH=$(git symbolic-ref --short -q HEAD)
+  # Commit changes
+  COMMIT_MSG="chore: auto-save benchmark results scale=${SCALE} precision=${PRECISION} gpus=${NUM_GPUS} date=$(date +'%Y-%m-%d %H:%M:%S')"
+  git commit -m "$COMMIT_MSG" || echo "No changes to commit."
 
-# Stash any local modifications to tracked files (like chmod +x changes or script micro-edits)
-# to guarantee a clean workspace for git pull --rebase
-echo "📦 Stashing any local changes/filemode changes..."
-git stash -q || true
+  # Push to GitHub
+  BRANCH=$(git symbolic-ref --short -q HEAD)
 
-if [ -n "$PROXY" ]; then
-    echo "🌐 Using Proxy: $PROXY for Git operations"
-    export http_proxy=$PROXY
-    export https_proxy=$PROXY
-    export HTTP_PROXY=$PROXY
-    export HTTPS_PROXY=$PROXY
-    export all_proxy=$PROXY
-fi
+  # Stash any local modifications to tracked files (like chmod +x changes or script micro-edits)
+  # to guarantee a clean workspace for git pull --rebase
+  echo "📦 Stashing any local changes/filemode changes..."
+  git stash -q || true
 
-MAX_RETRIES=5
-RETRY_COUNT=0
-PUSH_SUCCESS=0
+  if [ -n "$PROXY" ]; then
+      echo "🌐 Using Proxy: $PROXY for Git operations"
+      export http_proxy=$PROXY
+      export https_proxy=$PROXY
+      export HTTP_PROXY=$PROXY
+      export HTTPS_PROXY=$PROXY
+      export all_proxy=$PROXY
+  fi
 
-if [ -n "$PUSH_TOKEN" ]; then
-    echo "🚀 Pushing changes to GitHub using Personal Access Token..."
-else
-    echo "⚠️ GITHUB_TOKEN not set. Attempting standard git push..."
-fi
+  MAX_RETRIES=5
+  RETRY_COUNT=0
+  PUSH_SUCCESS=0
 
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    echo "🔄 Attempt $((RETRY_COUNT+1))/$MAX_RETRIES for Git Pull & Push..."
-    
-    if [ -n "$PUSH_TOKEN" ]; then
-        # 先进行 pull --rebase，防止并行测试推送时产生的 Non-fast-forward 冲突
-        git pull --rebase "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" || echo "Rebase skipped or no remote changes."
-        # Push using Token-embedded HTTPS URL (去掉了 --force，防止覆盖其他并行进程的提交)
-        if git push "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" -u; then
-            PUSH_SUCCESS=1
-            break
-        fi
-    else
-        git pull --rebase origin "$BRANCH" || echo "Rebase skipped."
-        if git push origin "$BRANCH" -u; then
-            PUSH_SUCCESS=1
-            break
-        fi
-    fi
-    
-    echo "❌ Push failed, network might be unstable. Retrying in 15 seconds..."
-    sleep 15
-    RETRY_COUNT=$((RETRY_COUNT+1))
-done
+  if [ -n "$PUSH_TOKEN" ]; then
+      echo "🚀 Pushing changes to GitHub using Personal Access Token..."
+  else
+      echo "⚠️ GITHUB_TOKEN not set. Attempting standard git push..."
+  fi
 
-if [ $PUSH_SUCCESS -eq 1 ]; then
-    echo "✅ Push successful!"
-else
-    echo "❌ Push failed after $MAX_RETRIES attempts."
-fi
+  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+      echo "🔄 Attempt $((RETRY_COUNT+1))/$MAX_RETRIES for Git Pull & Push..."
+      
+      if [ -n "$PUSH_TOKEN" ]; then
+          # 先进行 pull --rebase，防止并行测试推送时产生的 Non-fast-forward 冲突
+          git pull --rebase "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" || echo "Rebase skipped or no remote changes."
+          # Push using Token-embedded HTTPS URL (去掉了 --force，防止覆盖其他并行进程的提交)
+          if git push "https://${PUSH_TOKEN}@github.com/lockezhan/Antigravity-Project.git" "$BRANCH" -u; then
+              PUSH_SUCCESS=1
+              break
+          fi
+      else
+          git pull --rebase origin "$BRANCH" || echo "Rebase skipped."
+          if git push origin "$BRANCH" -u; then
+              PUSH_SUCCESS=1
+              break
+          fi
+      fi
+      
+      echo "❌ Push failed, network might be unstable. Retrying in 15 seconds..."
+      sleep 15
+      RETRY_COUNT=$((RETRY_COUNT+1))
+  done
 
-# Restore stashed local changes
-echo "📦 Restoring local changes..."
-git stash pop -q || true
+  if [ $PUSH_SUCCESS -eq 1 ]; then
+      echo "✅ Push successful!"
+  else
+      echo "❌ Push failed after $MAX_RETRIES attempts."
+  fi
+
+  # Restore stashed local changes
+  echo "📦 Restoring local changes..."
+  git stash pop -q || true
+
+) 200>git_push.lock
 
 echo "============================================="
 echo "🎉 Scheduled Run and Push complete!"
