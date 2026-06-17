@@ -274,6 +274,17 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
             if local_rank == 0 and epoch % 100 == 0:
                 print(f"Epoch {epoch:5d} | PDE Loss: {epoch_loss_pde:.4e} | BC Loss: {epoch_loss_bc:.4e}")
                 loss_history.append((epoch, epoch_loss_pde, epoch_loss_bc))
+                
+                # Real-time append to loss.dat to survive unexpected kills/crashes
+                loss_file = f"{out_dir}/figures/loss.dat"
+                os.makedirs(os.path.dirname(loss_file), exist_ok=True)
+                # Overwrite at the very beginning of a fresh start, otherwise append
+                mode = "w" if (epoch == 0 and start_epoch == 0) else "a"
+                with open(loss_file, mode) as f:
+                    if mode == "w":
+                        f.write("Epoch, PDE_Loss, BC_Loss\n")
+                    f.write(f"{epoch} {epoch_loss_pde} {epoch_loss_bc}\n")
+                
                 if epoch % 1000 == 0:
                     torch.save(net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
 

@@ -120,22 +120,16 @@ def main():
         import os
         os.makedirs(f"{out_dir}/figures", exist_ok=True)
         
-        # 断点续训时自动融合旧的 Loss 记录，避免覆盖丢失
+        # 从实时不断追加生成的 loss.dat 中直接读取完整记录用于绘制最终收敛图
         loss_file_path = f"{out_dir}/figures/loss.dat"
-        if start_epoch > 0 and os.path.exists(loss_file_path):
+        if os.path.exists(loss_file_path):
             try:
-                old_loss = np.loadtxt(loss_file_path, skiprows=1)
-                if len(old_loss.shape) == 1:
-                    old_loss = old_loss.reshape(1, -1)
-                # 仅保留小于当前 start_epoch 的记录，防止重叠
-                old_loss = old_loss[old_loss[:, 0] < start_epoch]
-                old_list = [tuple(row) for row in old_loss]
-                loss_history = old_list + loss_history
-                print(f"[Main] Merged {len(old_list)} historical loss entries from previous run.")
+                full_loss = np.loadtxt(loss_file_path, skiprows=1)
+                if len(full_loss.shape) == 1:
+                    full_loss = full_loss.reshape(1, -1)
+                loss_history = [tuple(row) for row in full_loss]
             except Exception as e:
-                print(f"[Main] Warning: Could not merge old loss history: {e}")
-                
-        np.savetxt(loss_file_path, loss_history, header="Epoch, PDE_Loss, BC_Loss", comments="")
+                print(f"[Main] Warning: Could not read full loss history for plotting: {e}")
         
         # 为了给可视化函数喂测试数据，我们在主进程单独采样
         X_test = geom.random_points(num_test)
