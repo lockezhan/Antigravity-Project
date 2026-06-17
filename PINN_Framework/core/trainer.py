@@ -286,7 +286,8 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
                     f.write(f"{epoch} {epoch_loss_pde} {epoch_loss_bc}\n")
                 
                 if epoch % 1000 == 0:
-                    torch.save(net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
+                    base_net = net.module if hasattr(net, 'module') else net
+                    torch.save(base_net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
 
     if local_rank == 0:
         monitor.stop()
