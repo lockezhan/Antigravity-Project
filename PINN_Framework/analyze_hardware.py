@@ -34,9 +34,28 @@ def analyze_and_plot(out_dir="outputs"):
             backend = backend_series.iloc[0]
     is_amd = "AMD" in backend or "ROCM" in backend
         
-    # 1. 相对时间轴（Relative Time）取代绝对时间戳
+    # 1. 消除因中断重连导致的时间跳变断层（将断点之间的长间隔剔除，使曲线完美衔接）
+    df = df.sort_values(by=['Time', 'GPU_ID']).reset_index(drop=True)
+    
+    # 获取各个 GPU 的时间线
+    unique_times = sorted(df['Time'].unique())
+    time_mapping = {}
+    cumulative_gap = 0.0
+    gap_threshold = 300.0  # 如果采样间隔超过 5 分钟，视为断点续训
+    
+    if len(unique_times) > 0:
+        time_mapping[unique_times[0]] = unique_times[0]
+        for i in range(1, len(unique_times)):
+            diff = unique_times[i] - unique_times[i-1]
+            if diff > gap_threshold:
+                cumulative_gap += (diff - 1.0) # 剔除空白，保留 1 秒的视觉连接
+            time_mapping[unique_times[i]] = unique_times[i] - cumulative_gap
+            
+    df['Time'] = df['Time'].map(time_mapping)
+    
+    # 转换为相对分钟数
     t0 = df['Time'].min()
-    df['Time_Min'] = (df['Time'] - t0) / 60.0 # 转换为经过的分钟数
+    df['Time_Min'] = (df['Time'] - t0) / 60.0
     
     figures_dir = os.path.join(out_dir, "figures")
     os.makedirs(figures_dir, exist_ok=True)

@@ -204,7 +204,7 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
         print("[Trainer] Starting custom PyTorch DDP Mini-Batch training loop...")
 
     with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir=f"{out_dir}/profiling/tensorboard_traces"):
-        for epoch in range(start_epoch, start_epoch + epochs):
+        for epoch in range(start_epoch, epochs):
             # 检查时间限制，防范多卡 DDP 异步锁死，所有 rank 协同退出
             if time_limit > 0 and (time.time() - start_time) > time_limit:
                 if local_rank == 0:
