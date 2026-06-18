@@ -81,6 +81,11 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     # 将 Adam 内部的数十次分散的显存读写操作融合成单个 CUDA Kernel，显著降低 CPU 开销
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-3, fused=(torch.cuda.is_available()))
     
+    # 手动为新创建的 optimizer 注入 initial_lr，以防止 PyTorch scheduler 在断点续训 (last_epoch > -1) 时报 KeyError
+    if start_epoch > 0:
+        for param_group in optimizer.param_groups:
+            param_group.setdefault('initial_lr', 1e-3)
+            
     # 引入余弦退火学习率调度器，从 1e-3 降至 1e-5，精细微调后期收敛精度，支持断点续训
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=(start_epoch + epochs), eta_min=1e-5, last_epoch=start_epoch - 1
