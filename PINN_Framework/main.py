@@ -143,5 +143,9 @@ def main():
         plot_loss_curve(loss_history, out_dir=out_dir)
         print(f"\n✅ All artifacts saved in {out_dir}/ directory.")
 
+    # 优雅销毁 DDP 进程组，避免 NCCL 报错
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
 if __name__ == "__main__":
     main()
