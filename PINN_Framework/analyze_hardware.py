@@ -34,7 +34,13 @@ def analyze_and_plot(out_dir="outputs"):
             backend = backend_series.iloc[0]
     is_amd = "AMD" in backend or "ROCM" in backend
         
-    # 1. 消除因中断重连导致的时间跳变断层（将断点之间的长间隔剔除，使曲线完美衔接）
+    # 1. 消除因中断重连导致的瞬时掉电/零利用率毛刺（忽略掉到0的数据）
+    # 我们保留最初始始的 1 分钟作为合法预热，之后的 0 数据全部判定为断线重启带来的毛刺并剔除
+    t_start = df['Time'].min()
+    valid_mask = ((df['Time'] - t_start) <= 60) | (df['GPU_Util'] > 1) | (df['Power_W'] > 50)
+    df = df[valid_mask]
+    
+    # 2. 消除因中断重连导致的时间跳变断层（将断点之间的长间隔剔除，使曲线完美衔接）
     df = df.sort_values(by=['Time', 'GPU_ID']).reset_index(drop=True)
     
     # 获取各个 GPU 的时间线
@@ -188,7 +194,7 @@ def analyze_and_plot(out_dir="outputs"):
     plt.savefig(os.path.join(figures_dir, "gpu_utilization.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
-    print("\n✅ Hardware Profiler Analysis Complete!")
+    print("\n[OK] Hardware Profiler Analysis Complete!")
     print(f"  - [ACADEMIC COMPLEMENT] 3x1 Shared Grid: {academic_path}")
     print(f"  - Single VRAM Curve: {os.path.join(figures_dir, 'vram_usage.png')}")
     print(f"  - Single Power Curve: {os.path.join(figures_dir, 'power_usage.png')}")
