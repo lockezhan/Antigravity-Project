@@ -10,23 +10,37 @@
 
 稳态二维不可压缩 Navier-Stokes 方程定义如下：
 
-- x方向动量方程：
-  u * ∂u/∂x + v * ∂u/∂y + ∂p/∂x - ν * (∂²u/∂x² + ∂²u/∂y²) = 0
-- y方向动量方程：
-  u * ∂v/∂x + v * ∂v/∂y + ∂p/∂y - ν * (∂²v/∂x² + ∂²v/∂y²) = 0
-- 连续性方程（质量守恒）：
-  ∂u/∂x + ∂v/∂y = 0
+*   **x 方向动量方程**：
+    $$
+    u \frac{\partial u}{\partial x} + v \frac{\partial u}{\partial y} + \frac{\partial p}{\partial x} - \nu \left( \frac{\partial^2 u}{\partial x^2} + \frac{\partial^2 u}{\partial y^2} \right) = 0
+    $$
+*   **y 方向动量方程**：
+    $$
+    u \frac{\partial v}{\partial x} + v \frac{\partial v}{\partial y} + \frac{\partial p}{\partial y} - \nu \left( \frac{\partial^2 v}{\partial x^2} + \frac{\partial^2 v}{\partial y^2} \right) = 0
+    $$
+*   **连续性方程（质量守恒）**：
+    $$
+    \frac{\partial u}{\partial x} + \frac{\partial v}{\partial y} = 0
+    $$
 
-其中 运动粘度系数 ν = 0.05，u 和 v 分别为速度分量，p 为压力。
+其中运动粘度系数 $\nu = 0.05$，$u$ 和 $v$ 分别为速度分量，$p$ 为压力。
 
 ### Kovasznay Flow 基准测试
-求解域为 [-0.5, 1.0] × [-0.5, 1.5]。其解析解用于边界条件定义和误差精度验证：
+求解域为 $[-0.5, 1.0] \times [-0.5, 1.5]$。其解析解用于边界条件定义和误差精度验证：
 
-- u_true(x, y) = 1 - e^(λx) * cos(2πy)
-- v_true(x, y) = (λ / 2π) * e^(λx) * sin(2πy)
-- p_true(x, y) = 0.5 * (1 - e^(2λx))
+$$
+u_{true}(x, y) = 1 - e^{\lambda x} \cos(2\pi y)
+$$
 
-其中参数 λ = 10 - √(100 + 4π²)。
+$$
+v_{true}(x, y) = \frac{\lambda}{2\pi} e^{\lambda x} \sin(2\pi y)
+$$
+
+$$
+p_{true}(x, y) = \frac{1}{2} (1 - e^{2\lambda x})
+$$
+
+其中参数 $\lambda = 10 - \sqrt{100 + 4\pi^2}$。
 
 ---
 
