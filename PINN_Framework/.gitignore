@@ -30,6 +30,3 @@ outputs/profiling/
 
 # Generated Figures (Optional: you might want to keep these, but usually ignored)
 # outputs/figures/
-
-# 忽略所有的并行测试输出目录
-PINN_Framework/outputs_*/
