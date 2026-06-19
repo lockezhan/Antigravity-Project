@@ -27,6 +27,7 @@ outputs/profiling/
 .vscode/
 .idea/
 .ipynb_checkpoints/
+.agents/
 
 # Generated Figures (Optional: you might want to keep these, but usually ignored)
 # outputs/figures/
