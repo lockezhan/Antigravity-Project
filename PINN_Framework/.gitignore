@@ -16,6 +16,8 @@ venv.bak/
 *.pth
 *.ckpt
 outputs/checkpoints/
+outputs_*/
+
 
 # Logs and Data
 outputs/profiling/
