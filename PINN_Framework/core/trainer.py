@@ -290,9 +290,27 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
                         f.write("Epoch, PDE_Loss, BC_Loss\n")
                     f.write(f"{epoch} {epoch_loss_pde} {epoch_loss_bc}\n")
                 
-                if epoch % 1000 == 0:
-                    base_net = net.module if hasattr(net, 'module') else net
-                    torch.save(base_net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
+                base_net = net.module if hasattr(net, 'module') else net
+                torch.save(base_net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
+                
+                # Keep only the 2 most recent checkpoints to save disk space
+                ckpt_dir = f"{out_dir}/checkpoints"
+                try:
+                    import glob
+                    ckpt_files = glob.glob(os.path.join(ckpt_dir, "model_ep*.pt"))
+                    def get_epoch_num(path):
+                        base = os.path.basename(path)
+                        num_str = base.replace("model_ep", "").replace(".pt", "")
+                        try:
+                            return int(num_str)
+                        except ValueError:
+                            return 0
+                    ckpt_files.sort(key=get_epoch_num)
+                    if len(ckpt_files) > 2:
+                        for old_ckpt in ckpt_files[:-2]:
+                            os.remove(old_ckpt)
+                except Exception as e:
+                    print(f"[Trainer] Error cleaning up checkpoints: {e}")
 
     if local_rank == 0:
         monitor.stop()
