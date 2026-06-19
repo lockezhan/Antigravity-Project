@@ -3,13 +3,13 @@ import numpy as np
 import torch
 import os
 
-def plot_ns_results(net, funcs, X_test):
+def plot_ns_results(net, funcs, X_test, out_dir="outputs"):
     """
-    使用传入的 X_test (测试点坐标) 和 net (已训练好的网络，已解除 DDP 包装并开启 eval) 来绘制 2D 流场。
+    使用传入 of X_test (测试点坐标) 和 net (已训练好的网络，已解除 DDP 包装并开启 eval) 来绘制 2D 流场。
     funcs: (u_func, v_func, p_func) 解析解函数
     """
     print("Generating Flow Field visualizations...")
-    os.makedirs("outputs/figures", exist_ok=True)
+    os.makedirs(f"{out_dir}/figures", exist_ok=True)
     
     # 提取函数
     u_func, v_func, p_func = funcs
@@ -70,5 +70,33 @@ def plot_ns_results(net, funcs, X_test):
         ax.set(xlabel='x', ylabel='y')
 
     plt.tight_layout()
-    plt.savefig('outputs/figures/ns_flow_field.png', dpi=300)
+    plt.savefig(f'{out_dir}/figures/ns_flow_field.png', dpi=300)
     plt.close()
+
+def plot_loss_curve(loss_history, out_dir="outputs"):
+    """
+    绘制并保存 Loss 随 Epoch 变化的收敛曲线。
+    """
+    if not loss_history:
+        return
+        
+    epochs = [item[0] for item in loss_history]
+    pde_losses = [item[1] for item in loss_history]
+    bc_losses = [item[2] for item in loss_history]
+    total_losses = [p + b for p, b in zip(pde_losses, bc_losses)]
+    
+    plt.figure(figsize=(10, 6), dpi=300)
+    plt.semilogy(epochs, pde_losses, label='PDE Loss', color='#1f77b4', alpha=0.8, linewidth=1.5)
+    plt.semilogy(epochs, bc_losses, label='BC Loss', color='#ff7f0e', alpha=0.8, linewidth=1.5)
+    plt.semilogy(epochs, total_losses, label='Total Loss', color='#2ca02c', alpha=0.9, linewidth=2.0)
+    
+    plt.xlabel('Epoch', fontsize=11, fontweight='semibold')
+    plt.ylabel('Loss (Log Scale)', fontsize=11, fontweight='semibold')
+    plt.title('PINN Navier-Stokes Solver Convergence History', fontsize=13, fontweight='bold', pad=12)
+    plt.grid(True, which="both", linestyle=':', alpha=0.5)
+    plt.legend(fontsize=10, loc='upper right')
+    
+    os.makedirs(f"{out_dir}/figures", exist_ok=True)
+    plt.savefig(f"{out_dir}/figures/loss_curve.png", bbox_inches='tight', dpi=300)
+    plt.close()
+    print(f"Loss curve saved to {out_dir}/figures/loss_curve.png")

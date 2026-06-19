@@ -53,7 +53,9 @@ class GPUDataLoader:
             batch_perm_indices = rank_perm[start_idx:end_idx]
             yield tuple(t[batch_perm_indices] for t in self.tensors)
 
-def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", profile=False):
+def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000, batch_size=8192, precision="float32", tol=-1.0, out_dir="outputs", profile=False, start_epoch=0, time_limit=-1.0):
+    import time
+    start_time = time.time()
     # DeepXDE 默认将全局设备设置为 cuda，这会导致 DataLoader 内部基于 CPU 的随机生成器 (Generator) 崩溃。
     # 因为我们已经在代码里手动使用了 .to(device) 转移张量，所以这里安全地将全局默认恢复为 cpu
     if hasattr(torch, 'set_default_device'):
@@ -78,6 +80,16 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     # 【优化项 3：开启 Fused Adam】
     # 将 Adam 内部的数十次分散的显存读写操作融合成单个 CUDA Kernel，显著降低 CPU 开销
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-3, fused=(torch.cuda.is_available()))
+    
+    # 手动为新创建的 optimizer 注入 initial_lr，以防止 PyTorch scheduler 在断点续训 (last_epoch > -1) 时报 KeyError
+    if start_epoch > 0:
+        for param_group in optimizer.param_groups:
+            param_group.setdefault('initial_lr', 1e-3)
+            
+    # 引入余弦退火学习率调度器，从 1e-3 降至 1e-5，精细微调后期收敛精度，支持断点续训
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=(start_epoch + epochs), eta_min=1e-5, last_epoch=start_epoch - 1
+    )
     
     # 【性能核弹级优化1：提前计算目标值，彻底剔除内部循环的 CPU 拷贝与 Numpy 转换】
     if local_rank == 0:
@@ -119,9 +131,9 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     )
     
     if local_rank == 0:
-        os.makedirs("outputs/checkpoints", exist_ok=True)
+        os.makedirs(f"{out_dir}/checkpoints", exist_ok=True)
         num_gpus = dist.get_world_size() if is_ddp else 1
-        monitor = HardwareMonitor(interval=2.0, num_gpus=num_gpus)
+        monitor = HardwareMonitor(log_dir=f"{out_dir}/profiling", interval=2.0, num_gpus=num_gpus, is_ddp=is_ddp)
         monitor.start()
 
     loss_history = []
@@ -191,8 +203,14 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
     if local_rank == 0:
         print("[Trainer] Starting custom PyTorch DDP Mini-Batch training loop...")
 
-    with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir="outputs/profiling/tensorboard_traces"):
-        for epoch in range(epochs):
+    with ProfilerContext(use_profiler=(profile and local_rank == 0), log_dir=f"{out_dir}/profiling/tensorboard_traces"):
+        for epoch in range(start_epoch, epochs):
+            # 检查时间限制，防范多卡 DDP 异步锁死，所有 rank 协同退出
+            if time_limit > 0 and (time.time() - start_time) > time_limit:
+                if local_rank == 0:
+                    print(f"\n[Trainer] Time limit of {time_limit:.1f}s reached at epoch {epoch}. Saving checkpoint and exiting gracefully...")
+                    torch.save(net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
+                break
             net.train()
             epoch_loss_pde = 0.0
             epoch_loss_bc = 0.0
@@ -248,11 +266,33 @@ def train_model(geom, pde_fn, funcs, num_domain, num_boundary, net, epochs=15000
                 epoch_loss_pde = pde_t.item()
                 epoch_loss_bc = bc_t.item()
             
+            # 步进学习率调度器，随 Epoch 衰减以微调收敛精度
+            scheduler.step()
+            
+            # 早停机制 (Early Stopping)：基于收敛容差 tol 自动判断退出
+            total_loss = epoch_loss_pde + epoch_loss_bc
+            if tol > 0 and total_loss < tol:
+                if local_rank == 0:
+                    print(f"\n[Trainer] Convergence reached at epoch {epoch}: Total Loss {total_loss:.4e} < tol {tol:.4e}. Early stopping...")
+                break
+            
             if local_rank == 0 and epoch % 100 == 0:
                 print(f"Epoch {epoch:5d} | PDE Loss: {epoch_loss_pde:.4e} | BC Loss: {epoch_loss_bc:.4e}")
                 loss_history.append((epoch, epoch_loss_pde, epoch_loss_bc))
+                
+                # Real-time append to loss.dat to survive unexpected kills/crashes
+                loss_file = f"{out_dir}/figures/loss.dat"
+                os.makedirs(os.path.dirname(loss_file), exist_ok=True)
+                # Overwrite at the very beginning of a fresh start, otherwise append
+                mode = "w" if (epoch == 0 and start_epoch == 0) else "a"
+                with open(loss_file, mode) as f:
+                    if mode == "w":
+                        f.write("Epoch, PDE_Loss, BC_Loss\n")
+                    f.write(f"{epoch} {epoch_loss_pde} {epoch_loss_bc}\n")
+                
                 if epoch % 1000 == 0:
-                    torch.save(net.state_dict(), f"outputs/checkpoints/model_ep{epoch}.pt")
+                    base_net = net.module if hasattr(net, 'module') else net
+                    torch.save(base_net.state_dict(), f"{out_dir}/checkpoints/model_ep{epoch}.pt")
 
     if local_rank == 0:
         monitor.stop()

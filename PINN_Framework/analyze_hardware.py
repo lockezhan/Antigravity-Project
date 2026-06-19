@@ -2,8 +2,8 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def analyze_and_plot():
-    log_file = "outputs/profiling/hardware_metrics.log"
+def analyze_and_plot(out_dir="outputs"):
+    log_file = os.path.join(out_dir, "profiling/hardware_metrics.log")
     if not os.path.exists(log_file):
         print(f"Error: Log file {log_file} not found.")
         return
@@ -26,11 +26,45 @@ def analyze_and_plot():
         print("No valid distributed hardware data found.")
         return
         
-    # 1. 相对时间轴（Relative Time）取代绝对时间戳
-    t0 = df['Time'].min()
-    df['Time_Min'] = (df['Time'] - t0) / 60.0 # 转换为经过的分钟数
+    # 自动探测平台后端，决定首选的 VRAM 上限线
+    backend = "ROCM_SMI"
+    if not df.empty and 'Backend' in df.columns:
+        backend_series = df['Backend'].dropna()
+        if not backend_series.empty:
+            backend = backend_series.iloc[0]
+    is_amd = "AMD" in backend or "ROCM" in backend
+        
+    # 1. 消除因中断重连导致的瞬时掉电/零利用率毛刺（忽略掉到0的数据）
+    # 我们保留最初始始的 1 分钟作为合法预热，之后的 0 数据全部判定为断线重启带来的毛刺并剔除
+    t_start = df['Time'].min()
+    valid_mask = ((df['Time'] - t_start) <= 60) | (df['GPU_Util'] > 1) | (df['Power_W'] > 50)
+    df = df[valid_mask]
     
-    os.makedirs("outputs/figures", exist_ok=True)
+    # 2. 消除因中断重连导致的时间跳变断层（将断点之间的长间隔剔除，使曲线完美衔接）
+    df = df.sort_values(by=['Time', 'GPU_ID']).reset_index(drop=True)
+    
+    # 获取各个 GPU 的时间线
+    unique_times = sorted(df['Time'].unique())
+    time_mapping = {}
+    cumulative_gap = 0.0
+    gap_threshold = 300.0  # 如果采样间隔超过 5 分钟，视为断点续训
+    
+    if len(unique_times) > 0:
+        time_mapping[unique_times[0]] = unique_times[0]
+        for i in range(1, len(unique_times)):
+            diff = unique_times[i] - unique_times[i-1]
+            if diff > gap_threshold:
+                cumulative_gap += (diff - 1.0) # 剔除空白，保留 1 秒的视觉连接
+            time_mapping[unique_times[i]] = unique_times[i] - cumulative_gap
+            
+    df['Time'] = df['Time'].map(time_mapping)
+    
+    # 转换为相对分钟数
+    t0 = df['Time'].min()
+    df['Time_Min'] = (df['Time'] - t0) / 60.0
+    
+    figures_dir = os.path.join(out_dir, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
     
     # 学术配色
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
@@ -53,18 +87,23 @@ def analyze_and_plot():
         c = colors[i % len(colors)]
         axs[0].plot(group['Time_Min'], vram_gb, label=f"GPU {gpu_id.split('_')[-1]}", color=c, linewidth=1.5, alpha=0.85)
         
-    # 3. 绘制 OOM 关键物理边界红虚线
-    axs[0].axhline(y=24.0, color='r', linestyle='--', linewidth=1.2, alpha=0.85)
-    axs[0].text(df['Time_Min'].max() * 0.98, 24.3, "NVIDIA RTX 4090 VRAM Limit (24GB)", color='r', fontsize=8, ha='right', va='bottom', fontweight='semibold')
-    
-    # 如果数据突破了 24GB，则自动画出 AMD W7900 (48GB) 的限制线，形成强烈的“破线”对比感
+    # 3. 绘制 OOM 关键物理边界虚线
     max_vram_gb = df['VRAM_MB'].max() / 1024.0
-    if max_vram_gb > 24.0:
-        axs[0].axhline(y=48.0, color='darkblue', linestyle='--', linewidth=1.2, alpha=0.85)
-        axs[0].text(df['Time_Min'].max() * 0.98, 48.3, "AMD W7900 VRAM Limit (48GB)", color='darkblue', fontsize=8, ha='right', va='bottom', fontweight='semibold')
-        axs[0].set_ylim(0, max(52.0, max_vram_gb * 1.15))
+    if is_amd:
+        limit_y = 48.0
+        label = "AMD W7900 VRAM Limit (48GB)"
+        color = "darkblue"
     else:
-        axs[0].set_ylim(0, 28.0) # 留出 24GB 线之上的余量空间
+        limit_y = 24.0
+        label = "NVIDIA RTX 4090 VRAM Limit (24GB)"
+        color = "r"
+        
+    axs[0].axhline(y=limit_y, color=color, linestyle='--', linewidth=1.2, alpha=0.85)
+    axs[0].text(df['Time_Min'].max() * 0.98, limit_y + 0.5, label, color=color, fontsize=8, ha='right', va='bottom', fontweight='semibold')
+    
+    # 动态适应 Y 轴高度范围
+    y_max = max(limit_y * 1.15, max_vram_gb * 1.15)
+    axs[0].set_ylim(0, y_max)
         
     axs[0].set_ylabel("VRAM Usage [GB]", fontsize=11, fontweight='semibold')
     axs[0].set_title("(a) Memory Footprint & Physical Boundaries", fontsize=12, fontweight='bold', pad=8)
@@ -107,7 +146,7 @@ def analyze_and_plot():
     plt.tight_layout()
     plt.subplots_adjust(hspace=0.12, bottom=0.11)
     
-    academic_path = "outputs/figures/hardware_academic_profile.png"
+    academic_path = os.path.join(figures_dir, "hardware_academic_profile.png")
     plt.savefig(academic_path, dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -125,7 +164,7 @@ def analyze_and_plot():
     plt.title("VRAM Consumption over Time", fontsize=13, pad=12)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    plt.savefig("outputs/figures/vram_usage.png", dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(figures_dir, "vram_usage.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
     # 2. Power
@@ -138,7 +177,7 @@ def analyze_and_plot():
     plt.title("Power Draw over Time", fontsize=13, pad=12)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    plt.savefig("outputs/figures/power_usage.png", dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(figures_dir, "power_usage.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
     # 3. GPU Util
@@ -152,14 +191,18 @@ def analyze_and_plot():
     plt.ylim(-5, 105)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-    plt.savefig("outputs/figures/gpu_utilization.png", dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(figures_dir, "gpu_utilization.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
-    print("\n✅ Hardware Profiler Analysis Complete!")
+    print("\n[OK] Hardware Profiler Analysis Complete!")
     print(f"  - [ACADEMIC COMPLEMENT] 3x1 Shared Grid: {academic_path}")
-    print("  - Single VRAM Curve: outputs/figures/vram_usage.png")
-    print("  - Single Power Curve: outputs/figures/power_usage.png")
-    print("  - Single GPU Util Curve: outputs/figures/gpu_utilization.png")
+    print(f"  - Single VRAM Curve: {os.path.join(figures_dir, 'vram_usage.png')}")
+    print(f"  - Single Power Curve: {os.path.join(figures_dir, 'power_usage.png')}")
+    print(f"  - Single GPU Util Curve: {os.path.join(figures_dir, 'gpu_utilization.png')}")
 
 if __name__ == "__main__":
-    analyze_and_plot()
+    import argparse
+    parser = argparse.ArgumentParser(description="Analyze hardware metrics for PINN training")
+    parser.add_argument("--dir", type=str, default="outputs", help="Directory containing the logs and where plots will be saved")
+    args = parser.parse_args()
+    analyze_and_plot(args.dir)
