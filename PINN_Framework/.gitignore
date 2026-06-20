@@ -33,6 +33,3 @@ outputs/profiling/
 # Generated Figures (Optional: you might want to keep these, but usually ignored)
 # outputs/figures/
 
-# Allow outputs_extreme_8_float32 directory
-!outputs_extreme_8_float32/
-!outputs_extreme_8_float32/**
