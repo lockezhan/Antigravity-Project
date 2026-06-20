@@ -86,10 +86,25 @@ $$
     ```bash
     docker build -f Dockerfile_rocm -t pinn-solver:rocm .
     ```
-*   **启动容器运行**（挂载 AMD 显卡计算与渲染设备，并启用宿主机共享内存）：
+*   **启动容器运行（推荐评测复现使用，挂载输出目录以提取图表与日志）**：
+    为了方便评测委员会直接在宿主机上查看生成的流场图、收敛曲线以及硬件监控日志，建议将宿主机的 `outputs` 目录挂载到容器中：
     ```bash
-    docker run -it --rm --device=/dev/kfd --device=/dev/dri --ipc=host pinn-solver:rocm
+    # 1. 在宿主机上创建输出目录
+    mkdir -p outputs
+
+    # 2. 启动容器运行（自动挂载输出目录，并挂载 AMD 显卡计算与渲染设备）
+    docker run -it --rm \
+      --device=/dev/kfd \
+      --device=/dev/dri \
+      --ipc=host \
+      -v $(pwd)/outputs:/workspace/PINN_Framework/outputs \
+      pinn-solver:rocm
+
+    # 3. (可选) 如果在 Linux 宿主机上遇到 root 权限生成的文件无法删除，可恢复所有权：
+    # sudo chown -R $USER:$USER outputs
     ```
+    运行结束后，您可以在宿主机的 `./outputs/figures/` 目录下直接查看到所有的流场预测图和 Loss 收敛图，在 `./outputs/profiling/` 下查看硬件指标日志。
+
 
 ### 2. 本地 Python 环境安装
 若直接在物理机环境运行，请确保系统已安装 **ROCm 驱动与 ROCm 版本的 PyTorch**，并在 Python 虚拟环境中执行依赖安装：

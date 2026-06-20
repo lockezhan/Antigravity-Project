@@ -15,5 +15,6 @@ COPY . .
 ENV DDE_BACKEND="pytorch"
 # 备注：W7000 系受官方原生支持，不要在此添加 HSA_OVERRIDE_GFX_VERSION
 
-# 默认运行命令（可由 docker run 时覆盖）
-CMD ["python", "main.py", "--scale", "large", "--precision", "float16"]
+# 默认运行命令（可由 docker run 时覆盖，推荐使用 bfloat16 避免 float16 下二阶导数数值下溢）
+CMD ["python", "main.py", "--scale", "large", "--precision", "bfloat16", "--out_dir", "outputs"]
+
